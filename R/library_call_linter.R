@@ -1,7 +1,6 @@
 #' Library call linter
 #'
 #' This linter covers several rules related to [library()] calls:
-#'
 #'  - Enforce such calls to all be at the top of the script.
 #'  - Block usage of argument `character.only`, in particular
 #'    for loading packages in a loop.
@@ -97,7 +96,10 @@ library_call_linter <- function(allow_preamble = TRUE) {
   upfront_call_xpath <- glue("
     //SYMBOL_FUNCTION_CALL[{ attach_call_cond }][last()]
       /preceding::expr
-      /SYMBOL_FUNCTION_CALL[{ unsuppressed_call_cond }][last()]
+      /*[
+        (self::SYMBOL_FUNCTION_CALL or self::SLOT[parent::expr/following-sibling::OP-LEFT-PAREN])
+        and ({ unsuppressed_call_cond })
+      ][last()]
       /following::expr[SYMBOL_FUNCTION_CALL[{ attach_call_cond }]]
       /parent::expr
   ")
@@ -111,7 +113,7 @@ library_call_linter <- function(allow_preamble = TRUE) {
       expr[2][STR_CONST]
       or (
         SYMBOL_SUB[text() = 'character.only']
-        and not(ancestor::expr[FUNCTION])
+        and not(ancestor::expr[FUNCTION or OP-LAMBDA])
       )
     ]
   ")
@@ -122,7 +124,7 @@ library_call_linter <- function(allow_preamble = TRUE) {
   //SYMBOL_FUNCTION_CALL[{ xp_text_in_table(bad_indirect_funs) }]
     /parent::expr
     /parent::expr[
-      not(ancestor::expr[FUNCTION])
+      not(ancestor::expr[FUNCTION or OP-LAMBDA])
       and expr[{ call_symbol_cond }]
     ]
   ")
@@ -148,7 +150,7 @@ library_call_linter <- function(allow_preamble = TRUE) {
   Linter(linter_level = "file", function(source_expression) {
     xml <- source_expression$full_xml_parsed_content
 
-    upfront_call_expr <- xml_find_all(xml, upfront_call_xpath)
+    upfront_call_expr <- xml_find_all_(xml, upfront_call_xpath)
 
     upfront_call_name <- xp_call_name(upfront_call_expr)
 
@@ -159,14 +161,14 @@ library_call_linter <- function(allow_preamble = TRUE) {
       type = "warning"
     )
 
-    char_only_direct_expr <- xml_find_all(xml, char_only_direct_xpath)
+    char_only_direct_expr <- xml_find_all_(xml, char_only_direct_xpath)
     char_only_direct_calls <- xp_call_name(char_only_direct_expr)
-    character_only <-
-      xml_find_first(char_only_direct_expr, "./SYMBOL_SUB[text() = 'character.only']")
+    has_character_only <-
+      xml_find_lgl_(char_only_direct_expr, "boolean(SYMBOL_SUB[text() = 'character.only'])")
     char_only_direct_msg_fmt <- ifelse(
-      is.na(character_only),
-      "Use symbols, not strings, in %s calls.",
-      "Use symbols in %s calls to avoid the need for 'character.only'."
+      has_character_only,
+      "Use symbols in %s calls to avoid the need for 'character.only'.",
+      "Use symbols, not strings, in %s calls."
     )
     char_only_direct_msg <-
       sprintf(as.character(char_only_direct_msg_fmt), char_only_direct_calls)
@@ -177,11 +179,11 @@ library_call_linter <- function(allow_preamble = TRUE) {
       type = "warning"
     )
 
-    char_only_indirect_expr <- xml_find_all(xml, char_only_indirect_xpath)
+    char_only_indirect_expr <- xml_find_all_(xml, char_only_indirect_xpath)
     char_only_indirect_lib_calls <- vapply(
       char_only_indirect_expr,
       function(expr) {
-        calls <- get_r_string(xml_find_all(expr, call_symbol_path))
+        calls <- get_r_string(xml_find_all_(expr, call_symbol_path))
         calls <- calls[calls %in% attach_calls]
         if (length(calls) == 1L) calls else NA_character_
       },
@@ -206,12 +208,12 @@ library_call_linter <- function(allow_preamble = TRUE) {
       type = "warning"
     )
 
-    consecutive_suppress_expr <- xml_find_all(xml, consecutive_suppress_xpath)
+    consecutive_suppress_expr <- xml_find_all_(xml, consecutive_suppress_xpath)
     consecutive_suppress_call_text <- xp_call_name(consecutive_suppress_expr)
-    consecutive_suppress_message <- glue(
-      "Unify consecutive calls to {consecutive_suppress_call_text}(). ",
+    consecutive_suppress_message <- paste0(
+      "Unify consecutive calls to ", consecutive_suppress_call_text, "(). ",
       "You can do so by writing all of the calls in one braced expression ",
-      "like {consecutive_suppress_call_text}({{...}})."
+      "like ", consecutive_suppress_call_text, "({...})."
     )
     consecutive_suppress_lints <- xml_nodes_to_lints(
       consecutive_suppress_expr,

@@ -5,15 +5,14 @@
 #'   `expect_true(A); expect_true(B)` is better than `expect_true(A && B)`, and
 #'   `expect_false(A); expect_false(B)` is better than `expect_false(A || B)`.
 #'
-#' Similar reasoning applies to `&&` usage inside [stopifnot()] and `assertthat::assert_that()` calls.
+#' Similar reasoning applies to `&&` usage inside [base::stopifnot()] and `assertthat::assert_that()` calls.
 #'
 #' Relatedly, `dplyr::filter(DF, A & B)` is the same as `dplyr::filter(DF, A, B)`, but the latter will be more readable
 #'   / easier to format for long conditions. Note that this linter assumes usages of `filter()` are `dplyr::filter()`;
 #'   if you're using another function named `filter()`, e.g. [stats::filter()], please namespace-qualify it to avoid
 #'   false positives. You can omit linting `filter()` expressions altogether via `allow_filter = TRUE`.
 #'
-#' @param allow_named_stopifnot Logical, `TRUE` by default. If `FALSE`, "named" calls to `stopifnot()`,
-#'   available since R 4.0.0 to provide helpful messages for test failures, are also linted.
+#' @param allow_named_stopifnot Logical, `TRUE` by default. If `FALSE`, "named" calls to `stopifnot()` are also linted.
 #' @param allow_filter Character naming the method for linting calls to `filter()`. The default, `"never"`, means
 #'   `filter()` and `dplyr::filter()` calls are linted; `"not_dplyr"` means only `dplyr::filter()` calls are linted;
 #'   and `"always"` means no calls to `filter()` are linted. Calls like `stats::filter()` are never linted.
@@ -79,19 +78,17 @@ conjunct_test_linter <- function(allow_named_stopifnot = TRUE,
   allow_filter <- match.arg(allow_filter)
 
   expect_true_assert_that_xpath <- "
-  parent::expr
-    /following-sibling::expr[1][AND2]
+  following-sibling::expr[1][AND2]
     /parent::expr
   "
-  named_stopifnot_condition <- if (allow_named_stopifnot) "and not(preceding-sibling::*[1][self::EQ_SUB])" else ""
+  named_stopifnot_condition <-
+    if (allow_named_stopifnot) "and not(preceding-sibling::*[not(self::COMMENT)][1][self::EQ_SUB])" else ""
   stopifnot_xpath <- glue("
-  parent::expr
-    /following-sibling::expr[1][AND2 {named_stopifnot_condition}]
+  following-sibling::expr[1][AND2 {named_stopifnot_condition}]
     /parent::expr
   ")
   expect_false_xpath <- "
-  parent::expr
-    /following-sibling::expr[1][OR2]
+  following-sibling::expr[1][OR2]
     /parent::expr
   "
 
@@ -101,7 +98,7 @@ conjunct_test_linter <- function(allow_named_stopifnot = TRUE,
     always = "true"
   )
   filter_xpath <- glue("
-  parent::expr[{ filter_ns_cond }]
+  self::*[{ filter_ns_cond }]
     /parent::expr
     /expr[AND]
   ")
@@ -112,13 +109,13 @@ conjunct_test_linter <- function(allow_named_stopifnot = TRUE,
     stopifnot_calls <- source_expression$xml_find_function_calls("stopifnot")
     expect_false_calls <- source_expression$xml_find_function_calls("expect_false")
     test_expr <- combine_nodesets(
-      xml_find_all(expect_true_assert_that_calls, expect_true_assert_that_xpath),
-      xml_find_all(stopifnot_calls, stopifnot_xpath),
-      xml_find_all(expect_false_calls, expect_false_xpath)
+      xml_find_all_(expect_true_assert_that_calls, expect_true_assert_that_xpath),
+      xml_find_all_(stopifnot_calls, stopifnot_xpath),
+      xml_find_all_(expect_false_calls, expect_false_xpath)
     )
 
     matched_fun <- xp_call_name(test_expr)
-    operator <- xml_find_chr(test_expr, "string(expr/*[self::AND2 or self::OR2])")
+    operator <- xml_find_chr_(test_expr, "string(expr/*[self::AND2 or self::OR2])")
     replacement_fmt <- ifelse(
       matched_fun %in% c("expect_true", "expect_false"),
       "Write multiple expectations like %1$s(A) and %1$s(B)",
@@ -139,7 +136,7 @@ conjunct_test_linter <- function(allow_named_stopifnot = TRUE,
 
     if (allow_filter != "always") {
       xml_calls <- source_expression$xml_find_function_calls("filter")
-      filter_expr <- xml_find_all(xml_calls, filter_xpath)
+      filter_expr <- xml_find_all_(xml_calls, filter_xpath)
 
       filter_lints <- xml_nodes_to_lints(
         filter_expr,

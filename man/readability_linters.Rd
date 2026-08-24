@@ -14,6 +14,7 @@ The following linters are tagged with 'readability':
 \itemize{
 \item{\code{\link{boolean_arithmetic_linter}}}
 \item{\code{\link{brace_linter}}}
+\item{\code{\link{coalesce_linter}}}
 \item{\code{\link{commas_linter}}}
 \item{\code{\link{commented_code_linter}}}
 \item{\code{\link{comparison_negation_linter}}}
@@ -25,6 +26,7 @@ The following linters are tagged with 'readability':
 \item{\code{\link{expect_length_linter}}}
 \item{\code{\link{expect_named_linter}}}
 \item{\code{\link{expect_not_linter}}}
+\item{\code{\link{expect_shape_linter}}}
 \item{\code{\link{expect_true_false_linter}}}
 \item{\code{\link{fixed_regex_linter}}}
 \item{\code{\link{for_loop_index_linter}}}
@@ -42,6 +44,7 @@ The following linters are tagged with 'readability':
 \item{\code{\link{lengths_linter}}}
 \item{\code{\link{library_call_linter}}}
 \item{\code{\link{line_length_linter}}}
+\item{\code{\link{list2df_linter}}}
 \item{\code{\link{matrix_apply_linter}}}
 \item{\code{\link{nested_ifelse_linter}}}
 \item{\code{\link{nested_pipe_linter}}}

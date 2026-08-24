@@ -11,7 +11,7 @@ test_that("lint() results do not depend on the working directory", {
   pkg_path <- test_path("dummy_packages", "assignmentLinter")
 
   # put a .lintr in the package root that excludes the first line of `R/jkl.R`
-  local_config(pkg_path, "exclusions: list('R/jkl.R' = 1)")
+  local_config("exclusions: list('R/jkl.R' = 1)", pkg_path)
 
   # linting the `R/jkl.R` should identify the following assignment lint on the
   # second line of the file
@@ -57,8 +57,8 @@ test_that("lint() results do not depend on the position of the .lintr", {
   # - the same directory as filepath
   # - the project directory
   # - the user's home directory
-  lint_with_config <- function(config_dir, config_string, filename) {
-    local_config(config_dir, config_string)
+  lint_with_config <- function(config_string, config_dir, filename) {
+    local_config(config_string, config_dir)
     lint(filename, linters = assignment_linter())
   }
 
@@ -76,8 +76,8 @@ test_that("lint() results do not depend on the position of the .lintr", {
   lints_with_config_at_pkg_root <- withr::with_dir(
     pkg_path,
     lint_with_config(
-      config_dir = ".",
       config_string = "exclusions: list('R/jkl.R' = 1)",
+      config_dir = ".",
       filename = file.path("R", "jkl.R")
     )
   )
@@ -85,8 +85,8 @@ test_that("lint() results do not depend on the position of the .lintr", {
   lints_with_config_in_r_dir <- withr::with_dir(
     pkg_path,
     lint_with_config(
-      config_dir = "R",
       config_string = "exclusions: list('jkl.R' = 1)",
+      config_dir = "R",
       filename = file.path("R", "jkl.R")
     )
   )
@@ -104,7 +104,7 @@ test_that("lint() results do not depend on the position of the .lintr", {
   )
 })
 
-test_that("lint uses linter names", {
+test_that("lint uses linter names", { # nofuzz: assignment
   expect_lint(
     "a = 2",
     list(linter = "bla"),
@@ -146,24 +146,24 @@ test_that("lint() results from file or text should be consistent", {
   expect_identical(lint_from_file, lint_from_text)
 })
 
-test_that("exclusions work with custom linter names", {
-  expect_lint(
+test_that("exclusions work with custom linter names", { # nofuzz: assignment comment_injection
+  expect_no_lint(
     "a = 2 # nolint: bla.",
-    NULL,
     linters = list(bla = assignment_linter()),
     parse_settings = FALSE
   )
 })
 
 test_that("old compatibility usage errors", {
+  error_msg <- rex::rex("Expected `", anything, "` to be a function of class <linter>")
+
   expect_error(
     expect_lint(
       "a == NA",
       "Use is.na",
       linters = equals_na_linter
     ),
-    regexp = "Passing linters as variables",
-    fixed = TRUE
+    error_msg
   )
 
   expect_error(
@@ -172,8 +172,7 @@ test_that("old compatibility usage errors", {
       "Use <-",
       linters = assignment_linter
     ),
-    regexp = "Passing linters as variables",
-    fixed = TRUE
+    error_msg
   )
 
   # Also within `linters_with_defaults()` (#1725)
@@ -183,8 +182,7 @@ test_that("old compatibility usage errors", {
       "Use <-",
       linters = linters_with_defaults(assignment_linter)
     ),
-    regexp = "Passing linters as variables",
-    fixed = TRUE
+    error_msg
   )
 
   expect_error(
@@ -193,8 +191,7 @@ test_that("old compatibility usage errors", {
       "Use is.na",
       linters = unclass(equals_na_linter())
     ),
-    regexp = "The use of linters of class 'function'",
-    fixed = TRUE
+    error_msg
   )
 
   # Trigger compatibility in auto_names()
@@ -204,33 +201,231 @@ test_that("old compatibility usage errors", {
       "Use is.na",
       linters = list(unclass(equals_na_linter()))
     ),
-    "The use of linters of class 'function'",
-    fixed = TRUE
+    error_msg
   )
 
   expect_error(
-    lint("a <- 1\n", linters = function(two, arguments) NULL),
-    regexp = "The use of linters of class 'function'",
-    fixed = TRUE
+    lint("a <- 1\n", linters = \(two, arguments) NULL),
+    error_msg
   )
 
   expect_error(
     lint("a <- 1\n", linters = "equals_na_linter"),
-    regexp = "Expected `linters()` to be a function of class <linter>",
-    fixed = TRUE
+    error_msg
   )
 })
 
 test_that("Linters throwing an error give a helpful error", {
   tmp_file <- withr::local_tempfile(lines = "a <- 1")
   lintr_error_msg <- "a broken linter"
-  linter <- function() Linter(function(source_expression) cli_abort(lintr_error_msg))
+  linter <- function() Linter(\(source_expression) cli_abort(lintr_error_msg))
   # NB: Some systems/setups may use e.g. symlinked files when creating under tempfile();
   #   we don't care much about that, so just check basename()
   expect_error(lint(tmp_file, linter()), lintr_error_msg, fixed = TRUE)
   expect_error(lint(tmp_file, list(broken_linter = linter())), lintr_error_msg, fixed = TRUE)
 })
 
+test_that("Linter() input is validated", {
+  expect_error(Linter(1L), "`fun` must be a function taking exactly one argument", fixed = TRUE)
+  expect_error(Linter(\(a, b) TRUE), "`fun` must be a function taking exactly one argument", fixed = TRUE)
+})
+
 test_that("typo in argument name gives helpful error", {
   expect_error(lint("xxx", litners = identity), "Found unknown arguments in `...`: `litners`")
+})
+
+
+test_that("gitlab_output() writes expected report", {
+  skip_if_not_installed("jsonlite")
+
+  tmpfile <- withr::local_tempfile()
+
+  # zero lints: we expect an empty json array
+  gitlab_output(lint(text = "", linters = infix_spaces_linter()), filename = tmpfile)
+  expect_match(
+    readLines(tmpfile),
+    R"(\s*\[\s*\]\s*)"
+  )
+
+  # single lint
+  gitlab_output(lint(text = "x<-1", linters = infix_spaces_linter()), filename = tmpfile)
+  expect_identical(
+    jsonlite::read_json(tmpfile),
+    list(list(
+      description = "Put spaces around all infix operators.",
+      check_name = "infix_spaces_linter",
+      fingerprint = "eb7cc117e8616bd8170fe6aa29e8b0ae849ac6c7",
+      location = list(path = "<text>", lines = list(begin = 1L)),
+      severity = "info"
+    ))
+  )
+
+  # two lints
+  gitlab_output(lint(text = c("x<-1", "y<-1"), linters = infix_spaces_linter()), filename = tmpfile)
+  expect_identical(
+    jsonlite::read_json(tmpfile),
+    list(list(
+      description = "Put spaces around all infix operators.",
+      check_name = "infix_spaces_linter",
+      fingerprint = "eb7cc117e8616bd8170fe6aa29e8b0ae849ac6c7",
+      location = list(path = "<text>", lines = list(begin = 1L)),
+      severity = "info"
+    ), list(
+      description = "Put spaces around all infix operators.",
+      check_name = "infix_spaces_linter",
+      fingerprint = "c20bd2090d08e3a5c12d670f5763ad43d233fe05",
+      location = list(path = "<text>", lines = list(begin = 2L)),
+      severity = "info"
+    ))
+  )
+
+  expect_error(gitlab_output(NULL), "must be a <lints> object", fixed = TRUE)
+})
+
+test_that("explicit parse_settings=TRUE works for inline data", {
+  withr::local_dir(tempdir())
+  .lintr <- withr::local_tempfile(lines = "linters: list(assignment_linter())")
+  withr::local_options(list(lintr.linter_file = .lintr))
+
+  lint_str <- "a=1\n" # assignment lints, but not infix_spaces
+  foo <- withr::local_tempfile(lines = lint_str)
+
+  expect_length(lint(foo, parse_settings = TRUE), 1L)
+  expect_length(lint(text = lint_str, parse_settings = TRUE), 1L)
+  expect_length(lint(lint_str, parse_settings = TRUE), 1L)
+
+  # parse_settings=TRUE default not picked up
+  expect_length(lint(text = lint_str), 2L)
+})
+
+test_that("lint(text=) handles unmarked UTF-8 text correctly", {
+  skip_if_not_utf8_locale()
+
+  tf <- withr::local_tempfile()
+  writeLines('x <- "\u00e4"', tf, useBytes = TRUE)
+  text_native <- readLines(tf)
+
+  expect_no_error(
+    expect_length(lint(text = text_native, linters = absolute_path_linter()), 0L)
+  )
+
+  writeLines(c('x <- "\u00e4"', 'y <- "/absolute/path"'), tf, useBytes = TRUE)
+  text_native_lint <- readLines(tf)
+
+  expect_no_error({
+    res_lint <- lint(text = text_native_lint, linters = absolute_path_linter(lax = FALSE))
+  })
+  expect_identical(res_lint[[1L]]$line_number, 2L)
+  expect_identical(res_lint[[1L]]$message, "Do not use absolute paths.")
+})
+
+test_that("lint(text=) handles UTF-8 marked text in non-UTF-8 locale", {
+  # Set LC_CTYPE to C to simulate non-UTF-8 locale
+  withr::local_locale(c(LC_CTYPE = "C"))
+
+  # Create UTF-8 marked text
+  text <- 'x <- "\u00e4"'
+  expect_identical(Encoding(text), "UTF-8")
+
+  expect_no_error(
+    expect_length(lint(text = text, linters = absolute_path_linter()), 0L)
+  )
+})
+
+test_that("lint(filename, text=) uses identity path in output", {
+  lints <- lint("R/foo.R", text = "x = 1\n", linters = assignment_linter())
+  expect_length(lints, 1L)
+  expect_match(lints[[1L]]$filename, "foo\\.R$") # Should NOT show <text>
+})
+
+test_that("lint(filename, text=) works with non-existent files", {
+  lints <- lint("R/file_that_does_not_exist.R", text = "x = 1\n", linters = assignment_linter())
+  expect_length(lints, 1L)
+  expect_match(lints[[1L]]$filename, "file_that_does_not_exist\\.R$")
+})
+
+test_that("lint(filename, text=) respects nolint comments", {
+  lints <- lint("new.R", text = "x = 1 # nolint: assignment_linter.\n", linters = assignment_linter())
+  expect_length(lints, 0L)
+
+  # block of skipped linting
+  block_code <- paste(
+    "# nolint start: assignment_linter.",
+    "x = 1",
+    "y = 2",
+    "# nolint end",
+    "z = 3",
+    sep = "\n"
+  )
+  lints_block <- lint("R/non_existent.R", text = block_code, linters = assignment_linter())
+  expect_length(lints_block, 1L)
+  expect_identical(lints_block[[1L]]$line_number, 5L)
+
+  # skip linting subsequent line
+  multiline_code <- paste(
+    "# nolint next: assignment_linter.",
+    "a = 1",
+    "b = 2",
+    sep = "\n"
+  )
+  lints_multiline <- lint("R/non_existent.R", text = multiline_code, linters = assignment_linter())
+  expect_length(lints_multiline, 1L)
+  expect_identical(lints_multiline[[1L]]$line_number, 3L)
+})
+
+test_that("lint(filename, text=) discovers config via identity path with parse_settings", {
+  pkg_path <- test_path("dummy_packages", "assignmentLinter")
+  local_config("linters: list(assignment_linter())", pkg_path)
+
+  lints <- lint(
+    file.path(pkg_path, "R", "abc.R"),
+    text = "x = 1\n",
+    parse_settings = TRUE
+  )
+  expect_length(lints, 1L)
+})
+
+test_that("lint(filename, text=) works with cache and updates when content changes", {
+  cache_path <- withr::local_tempdir()
+  linter <- assignment_linter()
+
+  env <- environment()
+  calls <- 0L
+  orig_lint_impl <- lint_impl_
+  local_mocked_bindings(
+    lint_impl_ = function(...) {
+      env$calls <- env$calls + 1L
+      orig_lint_impl(...)
+    }
+  )
+
+  lints <- lint("R/cached_file.R", text = "x = 1\n", linters = linter, cache = cache_path)
+  expect_length(lints, 1L)
+  expect_identical(calls, 1L)
+  expect_length(list.files(cache_path), 1L)
+
+  # Second call should use cache (lint_impl_ not called)
+  lints2 <- lint("R/cached_file.R", text = "x = 1\n", linters = linter, cache = cache_path)
+  expect_length(lints2, 1L)
+  expect_identical(calls, 1L)
+
+  # Changing text with the same identity path should invalidate cache and re-lint
+  lints3 <- lint("R/cached_file.R", text = "x <- 1\n", linters = linter, cache = cache_path)
+  expect_length(lints3, 0L)
+  expect_identical(calls, 2L)
+})
+
+test_that("lint(filename, text=) detects knitr from extension", {
+  rmd_content <- paste(
+    "---",
+    "title: test",
+    "---",
+    "",
+    "```{r}",
+    "x = 1",
+    "```",
+    sep = "\n"
+  )
+  lints <- lint("test.Rmd", text = rmd_content, linters = assignment_linter())
+  expect_length(lints, 1L)
 })

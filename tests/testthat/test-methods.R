@@ -1,23 +1,3 @@
-test_that("it returns the input if less than the max", {
-  expect_identical(lintr:::trim_output(character()), character())
-  expect_identical(lintr:::trim_output("test", max = 10L), "test")
-})
-
-test_that("it returns the input trimmed strictly to max if no lints found", {
-  expect_identical(lintr:::trim_output("testing a longer non_lint string", max = 7L), "testing")
-})
-
-test_that("it returns the input trimmed to the last full lint if one exists within the max", {
-  t1 <- readChar(test_path("lints"), file.size(test_path("lints")))
-  if (.Platform$OS.type == "windows") {
-    # Magic numbers expect newlines to be 1 character
-    t1 <- gsub("\r\n", "\n", t1, fixed = TRUE)
-  }
-  expect_identical(lintr:::trim_output(t1, max = 200L), substr(t1, 1L, 195L))
-  expect_identical(lintr:::trim_output(t1, max = 400L), substr(t1, 1L, 380L))
-  expect_identical(lintr:::trim_output(t1, max = 2000L), substr(t1, 1L, 1930L))
-})
-
 test_that("as.data.frame.lints", {
   l1 <- Lint(
     "dummy.R",
@@ -72,7 +52,7 @@ test_that("summary.lints() works (no lints)", {
   no_lints <- lint("x <- 1\n", linters = assignment_linter())
   no_lint_summary <- summary(no_lints)
   expect_s3_class(no_lint_summary, "data.frame")
-  expect_identical(nrow(no_lint_summary), 0L)
+  expect_shape(no_lint_summary, nrow = 0L)
 })
 
 test_that("summary.lints() works (lints found)", {
@@ -80,7 +60,7 @@ test_that("summary.lints() works (lints found)", {
   has_lint_summary <- summary(has_lints)
 
   expect_s3_class(has_lint_summary, "data.frame")
-  expect_identical(nrow(has_lint_summary), 1L)
+  expect_shape(has_lint_summary, nrow = 1L)
   expect_gt(has_lint_summary$style, 0L)
   expect_identical(has_lint_summary$warning, 0L)
   expect_identical(has_lint_summary$error, 0L)
@@ -120,7 +100,7 @@ test_that("print.lint works for inline data, even in RStudio", {
 
   skip_if_not_installed("rstudioapi")
   local_mocked_bindings(
-    hasFun = function(...) FALSE,
+    hasFun = \(...) FALSE,
     .package = "rstudioapi"
   )
   withr::with_options(
@@ -134,7 +114,7 @@ test_that("print.lints works", {
 
   tmp <- withr::local_tempfile()
   stopifnot(file.create(tmp))
-  expect_invisible(print(lint(tmp)))
+  expect_message(expect_invisible(print(lint(tmp))), "No lints found")
 })
 
 test_that("split.lint works as intended", {
@@ -156,14 +136,27 @@ test_that("as_tibble.list is _not_ dispatched directly", {
   skip_if_not_installed("tibble")
 
   lints <- lint(text = "a = 1", linters = assignment_linter())
-  expect_identical(nrow(tibble::as_tibble(lints)), 1L)
+  expect_shape(tibble::as_tibble(lints), nrow = 1L)
+
+  as_tibble <- tibble::as_tibble
+  with_mocked_bindings(
+    requireNamespace = \(pkg, ...) pkg != "tibble" && base::requireNamespace(pkg, ...),
+    expect_error(as_tibble(lints), "tibble is required to convert lints", fixed = TRUE)
+  )
 })
 
 test_that("as.data.table.list is _not_ dispatched directly", {
   skip_if_not_installed("data.table")
 
   lints <- lint(text = "a = 1", linters = assignment_linter())
-  expect_identical(nrow(data.table::as.data.table(lints)), 1L)
+  expect_shape(data.table::as.data.table(lints), nrow = 1L)
+
+  # nolint next: object_name_linter. Retain data.table naming style for clarity.
+  as.data.table <- data.table::as.data.table
+  with_mocked_bindings(
+    requireNamespace = \(pkg, ...) pkg != "data.table" && base::requireNamespace(pkg, ...),
+    expect_error(as.data.table(lints), "data.table is required to convert lints", fixed = TRUE)
+  )
 })
 
 local({
@@ -216,4 +209,10 @@ local({
     width = widths,
     wrapped_string = wrapped_strings
   )
+})
+
+test_that("build_line_ref formats hyperlinks when ansi hyperlink support is active", {
+  local_mocked_bindings(ansi_has_hyperlink_support = \(...) TRUE, .package = "cli")
+  l1 <- Lint("dummy.R", line_number = 1L, type = "style", message = "msg", line = "x")
+  expect_match(format(l1), "\033]8;.*file://")
 })

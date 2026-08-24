@@ -3,8 +3,8 @@
 #' @inheritParams xml_nodes_to_lints
 #' @inheritParams is_lint_level
 #' @param xpath Character string, an XPath identifying R code to lint.
-#'   For `make_linter_from_function_xpath()`, the XPath is relative to the `SYMBOL_FUNCTION_CALL` nodes of the
-#'   selected functions.
+#'   For `make_linter_from_function_xpath()`, the XPath is relative to the `parent::expr` of the
+#'   `SYMBOL_FUNCTION_CALL` nodes of the selected functions.
 #'   See [xmlparsedata::xml_parse_data()] and [get_source_expressions()].
 #'
 #' @examples
@@ -18,10 +18,12 @@ make_linter_from_xpath <- function(xpath,
   type <- match.arg(type)
   level <- match.arg(level)
 
-  stopifnot(
-    "xpath should be a character string" = is.character(xpath) && length(xpath) == 1L && !is.na(xpath),
-    "lint_message is required" = !missing(lint_message)
-  )
+  if (!is.character(xpath) || length(xpath) != 1L || is.na(xpath)) {
+    cli_abort("{.arg xpath} must be a character string.")
+  }
+  if (missing(lint_message)) {
+    cli_abort("{.arg lint_message} is required.")
+  }
 
   xml_key <- if (level == "expression") "xml_parsed_content" else "full_xml_parsed_content"
 
@@ -30,7 +32,7 @@ make_linter_from_xpath <- function(xpath,
       xml <- source_expression[[xml_key]]
 
 
-      expr <- xml_find_all(xml, xpath)
+      expr <- xml_find_all_(xml, xpath)
 
       xml_nodes_to_lints(
         expr,
@@ -54,17 +56,21 @@ make_linter_from_function_xpath <- function(function_names,
   type <- match.arg(type)
   level <- match.arg(level)
 
-  stopifnot(
-    "function_names should be a character vector" = is.character(function_names) && length(function_names) > 0L,
-    "xpath should be a character string" = is.character(xpath) && length(xpath) == 1L && !is.na(xpath),
-    "lint_message is required" = !missing(lint_message)
-  )
+  if (!is.character(function_names) || length(function_names) == 0L) {
+    cli_abort("{.arg function_names} must be a character vector.")
+  }
+  if (!is.character(xpath) || length(xpath) != 1L || is.na(xpath)) {
+    cli_abort("{.arg xpath} must be a character string.")
+  }
+  if (missing(lint_message)) {
+    cli_abort("{.arg lint_message} is required.")
+  }
 
   function() {
     Linter(linter_level = level, function(source_expression) {
       call_xml <- source_expression$xml_find_function_calls(function_names)
 
-      expr <- xml_find_all(call_xml, xpath)
+      expr <- xml_find_all_(call_xml, xpath)
 
       xml_nodes_to_lints(
         expr,

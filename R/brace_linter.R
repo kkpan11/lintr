@@ -1,16 +1,20 @@
 #' Brace linter
 #'
 #' Perform various style checks related to placement and spacing of curly braces:
-#'
 #'  - Opening curly braces are never on their own line and are always followed by a newline.
 #'  - Opening curly braces have a space before them.
 #'  - Closing curly braces are on their own line unless they are followed by an `else`.
 #'  - Closing curly braces in `if` conditions are on the same line as the corresponding `else`.
 #'  - Either both or neither branch in `if`/`else` use curly braces, i.e., either both branches use `{...}` or neither
 #'    does.
-#'  - Functions spanning multiple lines use curly braces.
+#'  - Function bodies are wrapped in curly braces.
 #'
-#' @param allow_single_line if `TRUE`, allow an open and closed curly pair on the same line.
+#' @param allow_single_line If `TRUE`, allow an open and closed curly pair on the same line.
+#' @param function_bodies When to require function bodies to be wrapped in curly braces. One of
+#'   - `"always"` to require braces around all function bodies, including inline functions,
+#'   - `"not_inline"` to require braces when a function body does not start on the same line as its signature,
+#'   - `"multi_line"` (the default) to require braces when a function definition spans multiple lines,
+#'   - `"never"` to never require braces in function bodies.
 #'
 #' @examples
 #' # will produce lints
@@ -50,7 +54,10 @@
 #' - <https://style.tidyverse.org/syntax.html#indenting>
 #' - <https://style.tidyverse.org/syntax.html#if-statements>
 #' @export
-brace_linter <- function(allow_single_line = FALSE) {
+brace_linter <- function(allow_single_line = FALSE,
+                         function_bodies = c("multi_line", "always", "not_inline", "never")) {
+  function_bodies <- match.arg(function_bodies)
+
   xp_cond_open <- xp_and(c(
     # matching } is on same line
     if (isTRUE(allow_single_line)) {
@@ -114,7 +121,7 @@ brace_linter <- function(allow_single_line = FALSE) {
     { xp_cond_closed }
     and (
       (@line1 = preceding-sibling::*[1][not(self::OP-LEFT-BRACE)]/@line2)
-      or (@line1 = parent::expr/following-sibling::*[1][not(self::ELSE)]/@line1)
+      or (@line1 = parent::expr/following-sibling::*[not(self::COMMENT)][1][not(self::ELSE)]/@line1)
     )
   ]")
 
@@ -124,7 +131,25 @@ brace_linter <- function(allow_single_line = FALSE) {
   # TODO(#1103): if c_style_braces is TRUE, this needs to be @line2 + 1
   xp_else_same_line <- glue("//ELSE[{xp_else_closed_curly} and @line1 != {xp_else_closed_curly}/@line2]")
 
-  xp_function_brace <- "(//FUNCTION | //OP-LAMBDA)/parent::expr[@line1 != @line2 and not(expr[OP-LEFT-BRACE])]"
+  if (function_bodies != "never") {
+    xp_cond_function_brace <- switch(
+      function_bodies,
+      always = "1",
+      multi_line = "@line1 != @line2",
+      not_inline = "@line1 != expr/@line1"
+    )
+
+    xp_function_brace <- glue(
+      "(//FUNCTION | //OP-LAMBDA)/parent::expr[{xp_cond_function_brace} and not(expr/OP-LEFT-BRACE)]"
+    )
+
+    msg_function_brace <- switch(
+      function_bodies,
+      always = "Wrap function bodies in curly braces.",
+      multi_line = "Wrap multi-line function bodies in curly braces.",
+      not_inline = "Wrap function bodies starting on a new line in curly braces."
+    )
+  }
 
   # if (x) { ... } else if (y) { ... } else { ... } is OK; fully exact pairing
   #   of if/else would require this to be
@@ -154,7 +179,7 @@ brace_linter <- function(allow_single_line = FALSE) {
     lints <- c(
       lints,
       xml_nodes_to_lints(
-        xml_find_all(xml, xp_open_curly),
+        xml_find_all_(xml, xp_open_curly),
         source_expression = source_expression,
         lint_message =
           "Opening curly braces should never go on their own line and should always be followed by a new line."
@@ -164,7 +189,7 @@ brace_linter <- function(allow_single_line = FALSE) {
     lints <- c(
       lints,
       xml_nodes_to_lints(
-        xml_find_all(xml, xp_paren_brace),
+        xml_find_all_(xml, xp_paren_brace),
         source_expression = source_expression,
         lint_message = "There should be a space before an opening curly brace."
       )
@@ -173,7 +198,7 @@ brace_linter <- function(allow_single_line = FALSE) {
     lints <- c(
       lints,
       xml_nodes_to_lints(
-        xml_find_all(xml, xp_closed_curly),
+        xml_find_all_(xml, xp_closed_curly),
         source_expression = source_expression,
         lint_message =
           "Closing curly-braces should always be on their own line, unless they are followed by an else."
@@ -183,25 +208,26 @@ brace_linter <- function(allow_single_line = FALSE) {
     lints <- c(
       lints,
       xml_nodes_to_lints(
-        xml_find_all(xml, xp_else_same_line),
+        xml_find_all_(xml, xp_else_same_line),
         source_expression = source_expression,
         lint_message = "`else` should come on the same line as the previous `}`."
       )
     )
-
-    lints <- c(
-      lints,
-      xml_nodes_to_lints(
-        xml_find_all(xml, xp_function_brace),
-        source_expression = source_expression,
-        lint_message = "Use curly braces for any function spanning multiple lines."
+    if (function_bodies != "never") {
+      lints <- c(
+        lints,
+        xml_nodes_to_lints(
+          xml_find_all_(xml, xp_function_brace),
+          source_expression = source_expression,
+          lint_message = msg_function_brace
+        )
       )
-    )
+    }
 
     lints <- c(
       lints,
       xml_nodes_to_lints(
-        xml_find_all(xml, xp_if_else_match_brace),
+        xml_find_all_(xml, xp_if_else_match_brace),
         source_expression = source_expression,
         lint_message = "Either both or neither branch in `if`/`else` should use curly braces."
       )

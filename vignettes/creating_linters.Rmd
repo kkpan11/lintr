@@ -156,7 +156,7 @@ Note that this check is unnecessary because we provided `linter_level = "express
 Therefore, it is preferable to write expression-level linters whenever possible. Two types of exceptions observed in `lintr` are
 (1) when several or all expressions are _required_ to ensure the linter logic applies (e.g., `conjunct_test_linter` looks for
 consecutive calls to `stopifnot()`, which will typically appear on consecutive expressions) or (2) when the linter logic
-is very simple & fast to compute, so that the overhead of re-running the linter is low (e.g., `single_quotes_linter`). In those cases,
+is very simple & fast to compute, so that the overhead of re-running the linter is low (e.g., `quotes_linter`). In those cases,
 use `is_lint_level(source_expression, "file")`.
 
 ```r
@@ -284,14 +284,20 @@ and so they've been tested and demonstrated their utility already.
    use
    ```r
    xml_calls <- source_expression$xml_find_function_calls("myfun")
-   call_xpath <- "parent::expr/some/cond"
+   call_xpath <- "some/cond"
    xml_find_all(xml_calls, call_xpath)
    ```
  * `make_linter_from_xpath()` and `make_linter_from_function_xpath()`: Whenever your
    linter can be expressed by a static XPath and a static message, use `make_linter_from_xpath()`
    or, if the XPath starts with `//SYMBOL_FUNCTION_CALL`, use `make_linter_from_function_xpath()`.
-   Instead of `make_linter_from_xpath(xpath = "//SYMBOL_FUNCTION_CALL[text() = 'foo' or text() = 'bar']/cond")`,
-   use `make_linter_from_function_xpath(function_names = c("foo", "bar"), xpath = "cond")`.
+   Instead of
+   `make_linter_from_xpath(xpath = "//SYMBOL_FUNCTION_CALL[text() = 'foo' or text() = 'bar']")`,
+   use
+   `make_linter_from_function_xpath(function_names = c("foo", "bar"), xpath = "SYMBOL_FUNCTION_CALL/cond")`.
+   Very often, such XPaths look like `//SYMBOL_FUNCTION_CALL/parent::expr/cond2`,
+   in which case the `xpath=` is simpler: `xpath = "cond2"`. Another common case is
+   `//SYMBOL_FUNCTION_CALL/parent::expr[exprCond]/furtherCond`, which becomes
+   `xpath = "self::*[exprCond]/furtherCond"`.
 
 ## Contributing to `{lintr}`
 

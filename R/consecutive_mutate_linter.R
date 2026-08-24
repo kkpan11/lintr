@@ -38,21 +38,20 @@
 #' @export
 consecutive_mutate_linter <- function(invalid_backends = "dbplyr") {
   attach_pkg_xpath <- "
-  parent::expr
-    /following-sibling::expr
+  following-sibling::expr
     /*[self::SYMBOL or self::STR_CONST]
   "
 
-  namespace_xpath <- glue("
-  //SYMBOL_PACKAGE[{ xp_text_in_table(invalid_backends) }]
-  |
-  //COMMENT[
-    contains(text(), '@import')
-    and (
-      {xp_or(sprintf(\"contains(text(), '%s')\", invalid_backends))}
-    )
-  ]
-  ")
+  namespace_xpath <- glue(R"[boolean(
+    //SYMBOL_PACKAGE[{ xp_text_in_table(invalid_backends) }]
+    |
+    //COMMENT[
+      contains(text(), '@import')
+      and (
+        {xp_or(sprintf("contains(text(), '%s')", invalid_backends))}
+      )
+    ]
+  )]")
 
   # match on the expr, not the SYMBOL_FUNCTION_CALL, to ensure
   #   namespace-qualified calls only match if the namespaces do.
@@ -74,7 +73,7 @@ consecutive_mutate_linter <- function(invalid_backends = "dbplyr") {
     # need the full file to also catch usages at the top level
     xml <- source_expression$full_xml_parsed_content
 
-    attach_str <- get_r_string(xml_find_all(
+    attach_str <- get_r_string(xml_find_all_(
       source_expression$xml_find_function_calls(c("library", "require")),
       attach_pkg_xpath
     ))
@@ -82,12 +81,11 @@ consecutive_mutate_linter <- function(invalid_backends = "dbplyr") {
       return(list())
     }
 
-    namespace_expr <- xml_find_first(xml, namespace_xpath)
-    if (!is.na(namespace_expr)) {
+    if (isTRUE(xml_find_lgl_(xml, namespace_xpath))) {
       return(list())
     }
 
-    bad_expr <- xml_find_all(xml, xpath)
+    bad_expr <- xml_find_all_(xml, xpath)
 
     xml_nodes_to_lints(
       bad_expr,

@@ -1,6 +1,6 @@
 #' Require usage of `lengths()` where possible
 #'
-#' [lengths()] is a function that was added to base R in version 3.2.0 to
+#' [base::lengths()] is a function that was added to base R in version 3.2.0 to
 #'   get the length of each element of a list. It is equivalent to
 #'   `sapply(x, length)`, but faster and more readable.
 #'
@@ -32,6 +32,6 @@
 #' @export
 lengths_linter <- make_linter_from_function_xpath(
   function_names = c("sapply", "vapply", "map_int", "map_dbl"),
-  xpath = "parent::expr/parent::expr[expr/SYMBOL[text() = 'length']]",
+  xpath = "parent::expr[expr/SYMBOL[text() = 'length']]",
   lint_message = "Use lengths() to find the length of each element in a list."
 )

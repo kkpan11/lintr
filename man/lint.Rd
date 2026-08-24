@@ -11,7 +11,7 @@ lint(
   linters = NULL,
   ...,
   cache = FALSE,
-  parse_settings = TRUE,
+  parse_settings = !inline_data,
   text = NULL
 )
 
@@ -36,7 +36,9 @@ lint_package(
 }
 \arguments{
 \item{filename}{Either the filename for a file to lint, or a character string of inline R code for linting.
-The latter (inline data) applies whenever \code{filename} has a newline character (\\n).}
+The latter (inline data) applies whenever \code{filename} has a newline character (\\n).
+When combined with \code{text}, \code{filename} serves as the file identity for config discovery, exclusions,
+knitr detection, and output; the file need not exist on disk.}
 
 \item{linters}{A named list of linter functions to apply. See \link{linters} for a full list of default and available
 linters.}
@@ -50,11 +52,13 @@ linters.}
 \item{cache}{When logical, toggle caching of lint results. If passed a character string, store the cache in this
 directory.}
 
-\item{parse_settings}{Logical, default \code{TRUE}. Whether to try and parse the \link[=read_settings]{settings}. Otherwise,
-the \code{\link[=default_settings]{default_settings()}} are used.}
+\item{parse_settings}{Logical. Whether to try and parse the \link[=read_settings]{settings}. Otherwise, the
+\code{\link[=default_settings]{default_settings()}} are used. \code{TRUE} by default when linting files, as opposed to \verb{text=}.
+Pass \code{TRUE} explicitly to discover settings when using \verb{text=} with \code{filename}.}
 
 \item{text}{Optional argument for supplying a string or lines directly, e.g. if the file is already in memory or
-linting is being done ad hoc.}
+linting is being done ad hoc. When combined with \code{filename}, content comes from \code{text} while
+\code{filename} provides file identity.}
 
 \item{path}{For the base directory of the project (for \code{lint_dir()}) or
 package (for \code{lint_package()}).}
@@ -67,9 +71,9 @@ If \code{FALSE}, use the full absolute path.}
 \item{pattern}{pattern for files, by default it will take files with any of the extensions
 .R, .Rmd, .qmd, .Rnw, .Rhtml, .Rrst, .Rtex, .Rtxt allowing for lowercase r (.r, ...).}
 
-\item{show_progress}{Logical controlling whether to show linting progress with a simple text
-progress bar \emph{via} \code{\link[utils:txtProgressBar]{utils::txtProgressBar()}}. The default behavior is to show progress in
-\code{\link[=interactive]{interactive()}} sessions not running a testthat suite.}
+\item{show_progress}{Logical controlling whether to show linting progress with
+\code{\link[cli:cli_progress_along]{cli::cli_progress_along()}}. The default behavior is to show progress in \code{\link[=interactive]{interactive()}} sessions
+not running a testthat suite.}
 }
 \value{
 An object of class \code{c("lints", "list")}, each element of which is a \code{"list"} object.
@@ -89,11 +93,14 @@ Note that if files contain unparseable encoding problems, only the encoding prob
 unintelligible error messages from other linters.
 }
 \examples{
+# linting inline-code
+lint("a = 123\n")
+lint(text = "a = 123")
+
+# linting a file
 f <- tempfile()
 writeLines("a=1", f)
-lint(f)                # linting a file
-lint("a = 123\n")      # linting inline-code
-lint(text = "a = 123") # linting inline-code
+lint(f)
 unlink(f)
 
 if (FALSE) {

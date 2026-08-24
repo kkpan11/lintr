@@ -48,18 +48,20 @@
 #' @seealso [linters] for a complete list of linters available in lintr.
 #' @export
 todo_comment_linter <- function(todo = c("todo", "fixme"), except_regex = NULL) {
-  todo_comment_regex <- rex(one_or_more("#"), any_spaces, or(todo))
-  valid_todo_regex <-
-    if (!is.null(except_regex)) paste0("#+", rex::shortcuts$any_spaces, "(?:", paste(except_regex, collapse = "|"), ")")
+  todo_comment_regex <- rex(one_or_more("#"), maybe("'"), any_spaces, or(todo))
+  valid_todo_regex <- NULL
+  if (!is.null(except_regex)) {
+    valid_todo_regex <- paste0("#+'?", rex::shortcuts$any_spaces, "(?:", paste(except_regex, collapse = "|"), ")")
+  }
 
   Linter(linter_level = "expression", function(source_expression) {
     xml <- source_expression$xml_parsed_content
 
-    comment_expr <- xml_find_all(xml, "//COMMENT")
+    comment_expr <- xml_find_all_(xml, "//COMMENT")
     comment_text <- xml_text(comment_expr)
-    invalid_todo <- re_matches(comment_text, todo_comment_regex, ignore.case = TRUE)
+    invalid_todo <- re_matches_logical(comment_text, todo_comment_regex, ignore.case = TRUE)
     if (!is.null(valid_todo_regex)) {
-      invalid_todo <- invalid_todo & !re_matches(comment_text, valid_todo_regex)
+      invalid_todo <- invalid_todo & !re_matches_logical(comment_text, valid_todo_regex)
     }
 
     xml_nodes_to_lints(

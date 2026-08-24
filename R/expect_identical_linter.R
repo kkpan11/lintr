@@ -60,7 +60,7 @@ expect_identical_linter <- function() {
   #   - skip cases like expect_equal(x, 1.02) or the constant vector version
   #     where a numeric constant indicates inexact testing is preferable
   #   - skip calls using dots (`...`); see tests
-  non_integer <- glue::glue("
+  non_integer <- glue("
     NUM_CONST[contains(text(), '.')]
     or (
       OP-MINUS
@@ -69,8 +69,8 @@ expect_identical_linter <- function() {
     )
   ")
 
-  expect_equal_xpath <- glue::glue("
-  parent::expr[not(
+  expect_equal_xpath <- glue("
+  self::*[not(
       following-sibling::EQ_SUB
       or following-sibling::expr[
         (
@@ -93,16 +93,15 @@ expect_identical_linter <- function() {
     /parent::expr
   ")
   expect_true_xpath <- "
-  parent::expr
-    /following-sibling::expr[1][expr[1]/SYMBOL_FUNCTION_CALL[text() = 'identical']]
+  following-sibling::expr[1][expr[1]/SYMBOL_FUNCTION_CALL[text() = 'identical']]
     /parent::expr
   "
   Linter(linter_level = "expression", function(source_expression) {
     expect_equal_calls <- source_expression$xml_find_function_calls("expect_equal")
     expect_true_calls <- source_expression$xml_find_function_calls("expect_true")
     bad_expr <- c(
-      xml_find_all(expect_equal_calls, expect_equal_xpath),
-      xml_find_all(expect_true_calls, expect_true_xpath)
+      xml_find_all_(expect_equal_calls, expect_equal_xpath),
+      xml_find_all_(expect_true_calls, expect_true_xpath)
     )
 
     xml_nodes_to_lints(

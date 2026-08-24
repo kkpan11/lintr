@@ -2,7 +2,7 @@
 #'
 #' @description
 #' This linter discourages combining condition functions like [stop()] with string concatenation
-#'   functions [paste()] and [paste0()]. This is because
+#'   functions [base::paste()] and [base::paste0()]. This is because
 #'
 #'  - `stop(paste0(...))` is redundant as it is exactly equivalent to `stop(...)`
 #'  - `stop(paste(...))` is similarly equivalent to `stop(...)` with separators (see examples)
@@ -44,10 +44,9 @@
 condition_message_linter <- function() {
   translators <- c("packageStartupMessage", "message", "warning", "stop")
   xpath <- glue("
-  self::SYMBOL_FUNCTION_CALL[
+  self::*[SYMBOL_FUNCTION_CALL[
     not(preceding-sibling::OP-DOLLAR or preceding-sibling::OP-AT)
-  ]
-    /parent::expr
+  ]]
     /following-sibling::expr[
       expr[1][SYMBOL_FUNCTION_CALL[text() = 'paste' or text() = 'paste0']]
       and not(SYMBOL_SUB[text() = 'collapse'])
@@ -57,7 +56,7 @@ condition_message_linter <- function() {
 
   Linter(linter_level = "expression", function(source_expression) {
     xml_calls <- source_expression$xml_find_function_calls(translators)
-    bad_expr <- xml_find_all(xml_calls, xpath)
+    bad_expr <- xml_find_all_(xml_calls, xpath)
     sep_value <- get_r_string(bad_expr, xpath = "./expr/SYMBOL_SUB[text() = 'sep']/following-sibling::expr/STR_CONST")
 
     bad_expr <- bad_expr[is.na(sep_value) | sep_value %in% c("", " ")]

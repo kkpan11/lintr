@@ -17,11 +17,13 @@ The following linters are tagged with 'best_practices':
 \item{\code{\link{any_is_na_linter}}}
 \item{\code{\link{boolean_arithmetic_linter}}}
 \item{\code{\link{class_equals_linter}}}
+\item{\code{\link{coalesce_linter}}}
 \item{\code{\link{commented_code_linter}}}
 \item{\code{\link{condition_call_linter}}}
 \item{\code{\link{condition_message_linter}}}
 \item{\code{\link{conjunct_test_linter}}}
 \item{\code{\link{cyclocomp_linter}}}
+\item{\code{\link{download_file_linter}}}
 \item{\code{\link{empty_assignment_linter}}}
 \item{\code{\link{expect_comparison_linter}}}
 \item{\code{\link{expect_length_linter}}}
@@ -30,6 +32,7 @@ The following linters are tagged with 'best_practices':
 \item{\code{\link{expect_null_linter}}}
 \item{\code{\link{expect_s3_class_linter}}}
 \item{\code{\link{expect_s4_class_linter}}}
+\item{\code{\link{expect_shape_linter}}}
 \item{\code{\link{expect_true_false_linter}}}
 \item{\code{\link{expect_type_linter}}}
 \item{\code{\link{fixed_regex_linter}}}

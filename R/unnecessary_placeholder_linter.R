@@ -45,14 +45,14 @@ unnecessary_placeholder_linter <- function() {
     ]
     /expr[2][
       SYMBOL[text() = '.']
-      and not(preceding-sibling::*[1][self::EQ_SUB])
+      and not(preceding-sibling::*[not(self::COMMENT)][1][self::EQ_SUB])
     ]
   ")
 
   Linter(linter_level = "expression", function(source_expression) {
     xml <- source_expression$xml_parsed_content
 
-    bad_expr <- xml_find_all(xml, xpath)
+    bad_expr <- xml_find_all_(xml, xpath)
 
     xml_nodes_to_lints(
       bad_expr,

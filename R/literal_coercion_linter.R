@@ -61,20 +61,18 @@ literal_coercion_linter <- function() {
     not(OP-DOLLAR or OP-AT)
     and (
       NUM_CONST[not(contains(translate(text(), 'E', 'e'), 'e'))]
-      or STR_CONST[not(following-sibling::*[1][self::EQ_SUB])]
+      or STR_CONST[not(following-sibling::*[not(self::COMMENT)][1][self::EQ_SUB])]
     )
   "
   xpath <- glue("
-  parent::expr
-    /parent::expr[
-      count(expr) = 2
-      and expr[2][ {not_extraction_or_scientific} ]
-    ]
-  ")
+  parent::expr[
+    count(expr) = 2
+    and expr[2][ {not_extraction_or_scientific} ]
+  ]")
 
   Linter(linter_level = "expression", function(source_expression) {
     xml_calls <- source_expression$xml_find_function_calls(coercers)
-    bad_expr <- xml_find_all(xml_calls, xpath)
+    bad_expr <- xml_find_all_(xml_calls, xpath)
 
     coercer <- xp_call_name(bad_expr)
     # tiptoe around the fact that we don't require {rlang}
@@ -91,6 +89,7 @@ literal_coercion_linter <- function() {
       )
       # nocov end
     } else {
+      bad_expr <- strip_comments_from_subtree(bad_expr)
       # duplicate, unless we add 'rlang::' and it wasn't there originally
       coercion_str <- report_str <- xml_text(bad_expr)
       if (any(is_rlang_coercer) && !("package:rlang" %in% search())) {
@@ -102,7 +101,7 @@ literal_coercion_linter <- function() {
       # TODO(#2473): Avoid a recommendation like '1' that clashes with implicit_integer_linter().
       literal_equivalent_str <- vapply(
         str2expression(coercion_str),
-        function(expr) deparse1(suppressWarnings(eval(expr))),
+        \(expr) deparse1(suppressWarnings(eval(expr))),
         character(1L)
       )
       lint_message <- sprintf(

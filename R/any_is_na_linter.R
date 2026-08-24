@@ -1,8 +1,12 @@
 #' Require usage of `anyNA(x)` over `any(is.na(x))`
 #'
-#' [anyNA()] exists as a replacement for `any(is.na(x))` which is more efficient
+#' [base::anyNA()] exists as a replacement for `any(is.na(x))` which is more efficient
 #'   for simple objects, and is at worst equally efficient.
 #'   Therefore, it should be used in all situations instead of the latter.
+#'
+#' This also lints `NA %in% x`, which is also more readably expressed as `anyNA(x)`. In
+#'   this case, note a subtle difference of behavior, namely that `is.na(NaN)` is `TRUE`
+#'   while `NA %in% NaN` is `FALSE`.
 #'
 #' @examples
 #' # will produce lints
@@ -37,8 +41,7 @@
 #' @export
 any_is_na_linter <- function() {
   any_xpath <- "
-  parent::expr
-    /following-sibling::expr[1][expr[1][SYMBOL_FUNCTION_CALL[text() = 'is.na']]]
+  following-sibling::expr[1][expr[1][SYMBOL_FUNCTION_CALL[text() = 'is.na']]]
     /parent::expr[
       count(expr) = 2
       or (count(expr) = 3 and SYMBOL_SUB[text() = 'na.rm'])
@@ -51,7 +54,7 @@ any_is_na_linter <- function() {
     xml <- source_expression$xml_parsed_content
     xml_calls <- source_expression$xml_find_function_calls("any")
 
-    any_expr <- xml_find_all(xml_calls, any_xpath)
+    any_expr <- xml_find_all_(xml_calls, any_xpath)
     any_lints <- xml_nodes_to_lints(
       any_expr,
       source_expression = source_expression,
@@ -59,7 +62,7 @@ any_is_na_linter <- function() {
       type = "warning"
     )
 
-    in_expr <- xml_find_all(xml, in_xpath)
+    in_expr <- xml_find_all_(xml, in_xpath)
     in_lints <- xml_nodes_to_lints(
       in_expr,
       source_expression = source_expression,

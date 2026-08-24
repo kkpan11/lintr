@@ -4,9 +4,9 @@
 #' * `expect_lint` asserts that specified lints are generated.
 #' * `expect_no_lint` asserts that no lints are generated.
 #'
-#' @param content a character vector for the file content to be linted, each vector element representing a line of
-#' text.
-#' @param checks checks to be performed:
+#' @param content A character vector for the file content to be linted, each vector element representing a line of
+#'   text.
+#' @param checks Checks to be performed:
 #' \describe{
 #'   \item{NULL}{check that no lints are returned.}
 #'   \item{single string or regex object}{check that the single lint returned has a matching message.}
@@ -16,11 +16,14 @@
 #'     corresponding named list (as described in the point above).}
 #' }
 #' Named vectors are also accepted instead of named lists, but this is a compatibility feature that
-#' is not recommended for new code.
-#' @param ... arguments passed to [lint()], e.g. the linters or cache to use.
-#' @param file if not `NULL`, read content from the specified file rather than from `content`.
-#' @param language temporarily override Rs `LANGUAGE` envvar, controlling localization of base R error messages.
-#' This makes testing them reproducible on all systems irrespective of their native R language setting.
+#'   is not recommended for new code.
+#' @param ... Arguments passed to [lint()], e.g. the linters or cache to use.
+#' @param file If not `NULL`, read content from the specified file rather than from `content`.
+#' @param language Temporarily override Rs `LANGUAGE` envvar, controlling localization of base R error messages.
+#'   This makes testing them reproducible on all systems irrespective of their native R language setting.
+#' @param ignore_order Logical, default `FALSE`. If `TRUE`, the order of the `checks` does not matter, e.g.
+#'   lints with higher line numbers can come before those with lower line numbers, and the order of linters
+#'   affecting the same line is also irrelevant.
 #' @return `NULL`, invisibly.
 #' @examples
 #' # no expected lint
@@ -41,27 +44,14 @@
 #'   trailing_blank_lines_linter()
 #' )
 #' @export
-expect_lint <- function(content, checks, ..., file = NULL, language = "en") {
-  if (!requireNamespace("testthat", quietly = TRUE)) {
-    # nocov start
-    cli_abort(
-      # nolint next: line_length_linter.
-      "{.fun expect_lint} and {.fun expect_no_lint} are designed to work within the {.pkg testthat} testing framework, which is not installed."
-    )
-    # nocov end
-  }
+expect_lint <- function(content, checks, ..., file = NULL, language = "en", ignore_order = FALSE) {
+  require_testthat()
+
   old_lang <- set_lang(language)
   on.exit(reset_lang(old_lang))
 
-  if (is.null(file)) {
-    file <- tempfile()
-    on.exit(unlink(file), add = TRUE)
-    local({
-      con <- base::file(file, encoding = "UTF-8")
-      on.exit(close(con))
-      writeLines(content, con = con, sep = "\n")
-    })
-  }
+  if (is.null(file)) on.exit(unlink(file), add = TRUE)
+  file <- maybe_write_content(file, content) # NB: the lint consistency fuzz suite anchors here.
 
   lints <- lint(file, ...)
   n_lints <- length(lints)
@@ -69,8 +59,11 @@ expect_lint <- function(content, checks, ..., file = NULL, language = "en") {
 
   wrong_number_fmt <- "got %d lints instead of %d%s"
   if (is.null(checks)) {
-    msg <- sprintf(wrong_number_fmt, n_lints, length(checks), lint_str)
-    return(testthat::expect(n_lints %==% 0L, msg))
+    if (n_lints != 0L) {
+      fail_msg <- sprintf(wrong_number_fmt, n_lints, 0L, lint_str)
+      return(testthat::fail(fail_msg))
+    }
+    return(testthat::succeed())
   }
 
   if (!is.list(checks) || !is.null(names(checks))) { # vector or named list
@@ -79,57 +72,85 @@ expect_lint <- function(content, checks, ..., file = NULL, language = "en") {
   checks[] <- lapply(checks, fix_names, "message")
 
   if (n_lints != length(checks)) {
-    msg <- sprintf(wrong_number_fmt, n_lints, length(checks), lint_str)
-    return(testthat::expect(FALSE, msg))
+    fail_msg <- sprintf(wrong_number_fmt, n_lints, length(checks), lint_str)
+    return(testthat::fail(fail_msg))
   }
 
-  local({
-    itr <- 0L
-    # keep 'linter' as a field even if we remove the deprecated argument from Lint() in the future
-    lint_fields <- unique(c(names(formals(Lint)), "linter"))
-    Map(
-      function(lint, check) {
-        itr <<- itr + 1L
-        lapply(names(check), function(field) {
-          if (!field %in% lint_fields) {
-            cli_abort(c(
-              x = "Check {.val {itr}} has an invalid field: {.field {field}}.",
-              i = "Valid fields are: {.field {lint_fields}}."
-            ))
-          }
-          check <- check[[field]]
-          value <- lint[[field]]
-          msg <- sprintf(
-            "check #%d: %s %s did not match %s",
-            itr, field, deparse(value), deparse(check)
-          )
-          # deparse ensures that NULL, list(), etc are handled gracefully
-          ok <- if (field == "message") {
-            re_matches(value, check)
-          } else {
-            isTRUE(all.equal(value, check))
-          }
-          if (!is.logical(ok)) {
-            cli_abort(c(
-              x = "Invalid regex result. Did you mistakenly have a capture group in the regex?",
-              i = "You can match parentheses with a character class, i.e. inside `[]`."
-            ))
-          }
-          testthat::expect(ok, msg)
-        })
-      },
-      lints,
-      checks
-    )
-  })
+  if (ignore_order) {
+    lint_order <- with(as.data.frame(lints), order(line_number, column_number, linter))
+    lints <- lints[lint_order]
 
-  invisible(NULL)
+    check_order <- order(
+      vapply(checks, \(x) x$line_number %||% 0L, FUN.VALUE = integer(1L)),
+      vapply(checks, \(x) x$column_number %||% 0L, FUN.VALUE = integer(1L)),
+      vapply(checks, \(x) x$linter %||% "", FUN.VALUE = character(1L))
+    )
+    checks <- checks[check_order]
+  }
+
+  expect_lint_impl_(lints, checks)
+
+  invisible(lints)
+}
+
+#' NB: must _not_ succeed(), should only fail() or abort()
+#' @noRd
+expect_lint_impl_ <- function(lints, checks, trace_env = rlang::caller_env()) {
+  itr <- 0L
+  # valid fields are those from Lint(), plus 'linter'
+  lint_fields <- c(names(formals(Lint)), "linter")
+
+  for (i in seq_along(lints)) {
+    lint <- lints[[i]]
+    check <- checks[[i]]
+
+    itr <- itr + 1L
+
+    for (field in names(check)) {
+      if (!field %in% lint_fields) {
+        cli_abort(c(
+          x = "Check {.val {itr}} has an invalid field: {.field {field}}.",
+          i = "Valid fields are: {.field {lint_fields}}."
+        ))
+      }
+      check_field <- check[[field]]
+      value <- lint[[field]]
+      ok <- if (field == "message") {
+        re_matches_logical(value, check_field)
+      } else {
+        isTRUE(all.equal(value, check_field))
+      }
+      if (!ok) {
+        fail_msg <- sprintf(
+          "check #%d: %s %s did not match %s",
+          # deparse ensures that NULL, list(), etc are handled gracefully
+          itr, field, deparse(value), deparse(check_field)
+        )
+        return(testthat::fail(fail_msg, trace_env = trace_env))
+      }
+    }
+  }
+
+  testthat::succeed()
 }
 
 #' @rdname expect_lint
 #' @export
 expect_no_lint <- function(content, ..., file = NULL, language = "en") {
+  require_testthat()
+  # nolint next: expect_no_lint_linter.
   expect_lint(content, NULL, ..., file = file, language = language)
+}
+
+maybe_write_content <- function(file, lines) {
+  if (!is.null(file)) {
+    return(file)
+  }
+  tmp <- tempfile()
+  con <- file(tmp, encoding = "UTF-8")
+  on.exit(close(con))
+  writeLines(lines, con = con, sep = "\n")
+  tmp
 }
 
 #' Test that the package is lint free
@@ -141,6 +162,8 @@ expect_no_lint <- function(content, ..., file = NULL, language = "en") {
 #' @param ... arguments passed to [lint_package()]
 #' @export
 expect_lint_free <- function(...) {
+  require_testthat()
+
   testthat::skip_on_cran()
   testthat::skip_on_covr()
 
@@ -151,10 +174,22 @@ expect_lint_free <- function(...) {
   if (has_lints) {
     lint_output <- format(lints)
   }
-  result <- testthat::expect(
-    !has_lints,
-    paste0("Not lint free\n", lint_output)
-  )
 
-  invisible(result)
+  if (has_lints) {
+    return(testthat::fail(paste0("Not lint free\n", lint_output)))
+  }
+  testthat::succeed()
+}
+
+# Helper function to check if testthat is installed.
+require_testthat <- function() {
+  parent_call <- sys.call(-1L)[[1L]]
+  # supported: foo() or lintr::foo(). Undefined behavior otherwise.
+  # nolint next: object_usage_linter. TODO(#2252): Remove this.
+  name <- as.character(if (is.name(parent_call)) parent_call else parent_call[[3L]])
+  if (!requireNamespace("testthat", quietly = TRUE)) {
+    cli_abort(
+      "{.fun {name}} is designed to work within the {.pkg testthat} testing framework, which could not be loaded."
+    )
+  }
 }

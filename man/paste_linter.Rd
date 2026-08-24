@@ -18,10 +18,10 @@ paste_linter(
 \code{paste()} and \code{paste0()} with \code{collapse = ", "} is not linted.}
 
 \item{allow_file_path}{String, one of \code{"never"}, \code{"double_slash"}, or \code{"always"}; \code{"double_slash"} by default.
-If \code{"never"}, usage of \code{paste()} and \code{paste0()} to construct file paths is not linted. If \code{"double_slash"},
+If \code{"always"}, usage of \code{paste()} and \code{paste0()} to construct file paths is not linted. If \code{"double_slash"},
 strings containing consecutive forward slashes will not lint. The main use case here is for URLs -- "paths" like
 \code{"https://"} will not induce lints, since constructing them with \code{file.path()} might be deemed unnatural.
-Lastly, if \code{"always"}, strings with consecutive forward slashes will also lint. Note that \code{"//"} is never linted
+Lastly, if \code{"never"}, strings with consecutive forward slashes will also lint. Note that \code{"//"} is never linted
 when it comes at the beginning or end of the input, to avoid requiring empty inputs like
 \code{file.path("", ...)} or \code{file.path(..., "")}.}
 }
@@ -29,18 +29,23 @@ when it comes at the beginning or end of the input, to avoid requiring empty inp
 The following issues are linted by default by this linter
 (see arguments for which can be de-activated optionally):
 \enumerate{
-\item Block usage of \code{\link[=paste]{paste()}} with \code{sep = ""}. \code{\link[=paste0]{paste0()}} is a faster, more concise alternative.
+\item Block usage of \code{\link[base:paste]{base::paste()}} with \code{sep = ""}. \code{\link[base:paste0]{base::paste0()}} is a faster, more concise alternative;
+this is valid unless \code{paste} occurs inside \link[base:expression]{base::expression}, which according to \link[grDevices:plotmath]{grDevices::plotmath}
+does not support the \code{sep} argument.
 \item Block usage of \code{paste()} or \code{paste0()} with \code{collapse = ", "}. \code{\link[=toString]{toString()}} is a direct
 wrapper for this, and alternatives like \code{\link[glue:glue_collapse]{glue::glue_collapse()}} might give better messages for humans.
 \item Block usage of \code{paste0()} that supplies \verb{sep=} -- this is not a formal argument to \code{paste0}, and
 is likely to be a mistake.
 \item Block usage of \code{paste()} / \code{paste0()} combined with \code{\link[=rep]{rep()}} that could be replaced by
-\code{\link[=strrep]{strrep()}}. \code{strrep()} can handle the task of building a block of repeated strings
+\code{\link[base:strrep]{base::strrep()}}. \code{strrep()} can handle the task of building a block of repeated strings
 (e.g. often used to build "horizontal lines" for messages). This is both more readable and
 skips the (likely small) overhead of putting two strings into the global string cache when only one is needed.
 
 Only target scalar usages -- \code{strrep} can handle more complicated cases (e.g. \code{strrep(letters, 26:1)},
 but those aren't as easily translated from a \code{paste(collapse=)} call.
+\item Block usage of \code{paste()} or \code{paste0()} to collapse the output of \code{\link[base:deparse]{base::deparse()}}, e.g.
+\code{paste(deparse(x), collapse = " ")}. \code{\link[base:deparse1]{base::deparse1()}} is a more readable equivalent,
+i.e. \code{deparse1(x)}.
 }
 }
 \examples{
@@ -72,6 +77,16 @@ lint(
 
 lint(
   text = 'paste0(x, collapse = "")',
+  linters = paste_linter()
+)
+
+lint(
+  text = 'expression(paste("a", "b", sep = ""))',
+  linters = paste_linter()
+)
+
+lint(
+  text = 'paste(deparse(x), collapse = " ")',
   linters = paste_linter()
 )
 
@@ -118,6 +133,16 @@ lint(
 
 lint(
   text = 'paste(x, collapse = "")',
+  linters = paste_linter()
+)
+
+lint(
+  text = 'expression(paste("a", "b"))',
+  linters = paste_linter()
+)
+
+lint(
+  text = "deparse1(x)",
   linters = paste_linter()
 )
 

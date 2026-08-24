@@ -42,24 +42,24 @@ missing_argument_linter <- function(except = c("alist", "quote", "switch"), allo
     )
   }
 
-  # require >3 children to exclude foo(), which is <expr><OP-LEFT-PAREN><OP-RIGHT-PAREN>
+  # require >3 children to exclude foo(), which is <expr><OP-LEFT-PAREN><OP-RIGHT-PAREN>,
+  #   possibly with intervening comments too, #2741
   xpath <- glue("
-    parent::expr
-      /parent::expr[count(*) > 3]
-      /*[{xp_or(conds)}]
+  parent::expr[count(*) - count(COMMENT) > 3]
+    /*[{xp_or(conds)}]
   ")
 
   Linter(linter_level = "file", function(source_expression) {
-    xml_targets <- source_expression$xml_find_function_calls(NULL, keep_names = TRUE)
+    xml_targets <- source_expression$xml_find_function_calls(NULL, keep_names = TRUE, include_s4_slots = TRUE)
     xml_targets <- xml_targets[!names(xml_targets) %in% except]
 
-    missing_args <- xml_find_all(xml_targets, xpath)
+    missing_args <- xml_find_all_(xml_targets, xpath)
 
-    named_idx <- xml_name(missing_args) == "EQ_SUB"
+    named_idx <- xml_name_(missing_args) == "EQ_SUB"
     arg_id <- character(length(missing_args))
-    arg_id[named_idx] <- sQuote(xml_find_chr(missing_args[named_idx], "string(preceding-sibling::SYMBOL_SUB[1])"), "'")
-    # TODO(#2452): use xml_find_int() instead
-    arg_id[!named_idx] <- xml_find_num(missing_args[!named_idx], "count(preceding-sibling::OP-COMMA)") + 1.0
+    arg_id[named_idx] <- sQuote(xml_find_chr_(missing_args[named_idx], "string(preceding-sibling::SYMBOL_SUB[1])"), "'")
+    # TODO(#2452): use xml_find_int_() instead
+    arg_id[!named_idx] <- xml_find_num_(missing_args[!named_idx], "count(preceding-sibling::OP-COMMA)") + 1.0
 
     xml_nodes_to_lints(
       missing_args,

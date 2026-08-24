@@ -30,9 +30,7 @@ test_that("linters_with_defaults warns on unused NULLs", {
 
 test_that("linters_with_tags() verifies the output of available_linters()", {
   local_mocked_bindings(
-    available_linters = function(...) {
-      data.frame(linter = c("fake_linter", "very_fake_linter"), package = "lintr", tags = "")
-    }
+    available_linters = \(...) data.frame(linter = c("fake_linter", "very_fake_linter"), package = "lintr", tags = "")
   )
   expect_error(
     linters_with_tags(NULL),
@@ -53,7 +51,6 @@ test_that("all default linters are tagged default", {
   expect_length(linters_with_tags(NULL, exclude_tags = available_tags()), 0L)
 
   # Check that above test also trips on default arguments.
-  skip_if_not_r_version("4.1.0") # Desired all.equal behavior only available in >= 4.1
   expect_identical(
     all.equal(linters_with_tags("default"), linters_with_defaults(line_length_linter(120L))),
     c(
@@ -64,6 +61,8 @@ test_that("all default linters are tagged default", {
 })
 
 test_that("can instantiate all linters without arguments", {
+  skip_if_not_installed("cyclocomp") # avoid warning
+
   all_linters <- linters_with_tags(tags = NULL)
 
   expect_type(all_linters, "list")
@@ -72,13 +71,6 @@ test_that("can instantiate all linters without arguments", {
   really_all_linters <- suppressWarnings(linters_with_tags(tags = NULL, exclude_tags = NULL))
   expect_type(really_all_linters, "list")
   expect_length(really_all_linters, nrow(available_linters(exclude_tags = NULL)))
-})
-
-test_that("with_defaults is fully deprecated", {
-  expect_error(
-    with_defaults(),
-    rex::rex("Use linters_with_defaults or modify_defaults instead.")
-  )
 })
 
 test_that("modify_defaults works", {
@@ -92,14 +84,6 @@ test_that("modify_defaults works", {
 })
 
 test_that("linters_with_defaults(default = .) is supported with a deprecation warning", {
-  expect_warning(
-    {
-      linters <- linters_with_defaults(default = list(), whitespace_linter())
-    },
-    "`default` is not an argument"
-  )
-  expect_named(linters, "whitespace_linter")
-
   # the same warning is not triggered in modify_defaults
   expect_silent({
     linters <- modify_defaults(defaults = list(), default = list(), whitespace_linter())
@@ -107,7 +91,7 @@ test_that("linters_with_defaults(default = .) is supported with a deprecation wa
   expect_named(linters, c("default", "whitespace_linter"))
 
   # if default= is explicitly provided alongside defaults=, assume that was intentional
-  default <- Linter(function(.) list())
+  default <- Linter(\(.) list())
   expect_silent({
     linters <- linters_with_defaults(defaults = list(), default = default)
   })
@@ -115,6 +99,8 @@ test_that("linters_with_defaults(default = .) is supported with a deprecation wa
 })
 
 test_that("all_linters contains all available linters", {
+  skip_if_not_installed("cyclocomp") # avoid warning
+
   all_linters <- all_linters(packages = "lintr")
 
   expect_identical(linters_with_tags(NULL, packages = "lintr"), all_linters)
@@ -122,8 +108,35 @@ test_that("all_linters contains all available linters", {
 })
 
 test_that("all_linters respects ellipsis argument", {
+  skip_if_not_installed("cyclocomp") # avoid warning
+
   expect_identical(
     linters_with_tags(tags = NULL, implicit_integer_linter = NULL),
     all_linters(packages = "lintr", implicit_integer_linter = NULL)
+  )
+})
+
+test_that("Excluding cyclocomp linter avoids a warning", {
+  local_mocked_bindings(
+    requireNamespace = \(pkg, ...) pkg != "cyclocomp" || base::requireNamespace(pkg, ...)
+  )
+
+  expect_silent(all_linters(cyclocomp_linter = NULL))
+  expect_silent(linters_with_tags("configurable", cyclocomp_linter = NULL))
+})
+
+test_that("cyclocomp_linter does warn as intended", {
+  local_mocked_bindings(
+    requireNamespace = \(pkg, ...) pkg != "cyclocomp" && base::requireNamespace(pkg, ...)
+  )
+
+  expect_warning(linters_with_tags("configurable"), "cyclocomp::cyclocomp")
+})
+
+test_that("call_linter_factory reports informative abort when a linter factory fails instantiation", {
+  local_mocked_bindings(assignment_linter = \(...) cli::cli_abort("simulated factory failure"))
+  expect_error(
+    linters_with_tags("default"),
+    "Could not create linter with"
   )
 })

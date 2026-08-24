@@ -19,8 +19,8 @@ rx_static_escape <- local({
     "]"
   )
   rex(or(
-    capture(rx_char_escape, name = "char_escape"),
-    capture(rx_trivial_char_group, name = "trivial_char_group")
+    rx_char_escape,
+    rx_trivial_char_group
   ))
 })
 
@@ -33,8 +33,55 @@ rx_static_token <- local({
 
 rx_unescaped_regex <- paste0("(?s)", rex(start, zero_or_more(rx_non_active_char), end))
 rx_static_regex <- paste0("(?s)", rex(start, zero_or_more(rx_static_token), end))
-rx_first_static_token <- paste0("(?s)", rex(start, zero_or_more(rx_non_active_char), rx_static_escape))
 rx_escapable_tokens <- "^${}().*+?|[]\\<>=:;/_-!@#%&,~"
+rx_escapable_regex <- rex("\\", capture(one_of(rx_escapable_tokens)))
+rx_trivial_char_group <- paste0(R"{(?s)(?<!\\)(?:\\\\)*\K\[}", rex(
+  capture(or(
+    group("\\", or(
+      group("x", between(xdigit, 1L, 2L)),
+      between("0":"7", 1L, 3L),
+      group("u{", between(xdigit, 1L, 4L), "}"),
+      group("u", between(xdigit, 1L, 4L)),
+      group("U{", between(xdigit, 1L, 8L), "}"),
+      group("U", between(xdigit, 1L, 8L)),
+      none_of("dswDSW")
+    )),
+    any
+  ))
+), "\\]")
+
+rx_esc_num <- paste0(
+  R"{(?s)(?<!\\)(?:\\\\)*\K\\}",
+  rex(or(
+    group("x", between(xdigit, 1L, 2L)),
+    group("u{", between(xdigit, 1L, 4L), "}"),
+    group("u", between(xdigit, 1L, 4L)),
+    group("U{", between(xdigit, 1L, 8L), "}"),
+    group("U", between(xdigit, 1L, 8L)),
+    between("0":"7", 1L, 3L)
+  ))
+)
+
+decode_escapes <- function(s) {
+  m <- gregexpr(rx_esc_num, s, perl = TRUE)
+  matches <- regmatches(s, m)
+  all_vec <- unlist(matches, use.names = FALSE)
+  if (length(all_vec) == 0L) {
+    return(s)
+  }
+  is_hex <- grepl("^\\\\[xuU]", all_vec)
+  codes <- integer(length(all_vec))
+  if (any(is_hex)) {
+    codes[is_hex] <- strtoi(gsub("[^0-9a-fA-F]", "", all_vec[is_hex]), base = 16L)
+  }
+  if (!all(is_hex)) {
+    codes[!is_hex] <- strtoi(substr(all_vec[!is_hex], 2L, 4L), base = 8L)
+  }
+  codes[is.na(codes)] <- 0L
+  all_chars <- intToUtf8(codes, multiple = TRUE)
+  regmatches(s, m) <- relist(all_chars, matches)
+  s
+}
 
 #' Determine whether a regex pattern actually uses regex patterns
 #'
@@ -60,54 +107,22 @@ is_not_regex <- function(str, allow_unescaped = FALSE) {
 
 #' Compute a fixed string equivalent to a static regular expression
 #'
-#' @param static_regex A regex for which `is_not_regex()` returns `TRUE`
-#' @return A string such that `grepl(static_regex, x)` is equivalent to
-#' `grepl(get_fixed_string(static_regex), x, fixed = TRUE)`
+#' @param static_regex A character vector of regex patterns for which `is_not_regex()` returns `TRUE`.
+#' @return A character vector of quoted strings such that `grepl(static_regex, x)` is equivalent to
+#'   `eval(parse(text = sprintf("grepl(%s, x, fixed = TRUE)", get_fixed_string(static_regex))))`.
 #'
 #' @noRd
 get_fixed_string <- function(static_regex) {
   if (length(static_regex) == 0L) {
     return(character())
-  } else if (length(static_regex) > 1L) {
-    return(vapply(static_regex, get_fixed_string, character(1L)))
   }
-  fixed_string <- ""
-  current_match <- regexpr(rx_first_static_token, static_regex, perl = TRUE)
-  while (current_match != -1L) {
-    token_type <- attr(current_match, "capture.names")[attr(current_match, "capture.start") > 0L]
-    token_start <- max(attr(current_match, "capture.start"))
-    if (token_start > 1L) {
-      fixed_string <- paste0(fixed_string, substr(static_regex, 1L, token_start - 1L))
-    }
-    consume_to <- attr(current_match, "match.length")
-    token_content <- substr(static_regex, token_start, consume_to)
-    fixed_string <- paste0(fixed_string, get_token_replacement(token_content, token_type))
-    static_regex <- substr(static_regex, start = consume_to + 1L, stop = nchar(static_regex))
-    current_match <- regexpr(rx_first_static_token, static_regex, perl = TRUE)
-  }
-  paste0(fixed_string, static_regex)
-}
+  static_regex <- static_regex |>
+    gsub(pattern = rx_trivial_char_group, replacement = "\\1", perl = TRUE) |>
+    decode_escapes() |>
+    gsub(pattern = rx_escapable_regex, replacement = "\\1", perl = TRUE) |>
+    encodeString(quote = '"', justify = "none")
 
-#' Get a fixed string equivalent to a regular expression token
-#'
-#' This handles two cases: converting a "trivial" character group like `[$]` to `$`,
-#'   and converting an escaped character like `"\\$"` to `$`. Splitting a full expression
-#'   into tokens is handled by [get_fixed_string()].
-#'
-#' @noRd
-get_token_replacement <- function(token_content, token_type) {
-  if (token_type == "trivial_char_group") { # otherwise, char_escape
-    token_content <- substr(token_content, start = 2L, stop = nchar(token_content) - 1L)
-    if (startsWith(token_content, "\\")) { # escape within trivial char group
-      get_token_replacement(token_content, "char_escape")
-    } else {
-      token_content
-    }
-  } else if (re_matches(token_content, rex("\\", one_of(rx_escapable_tokens)))) {
-    substr(token_content, start = 2L, stop = nchar(token_content))
-  } else {
-    eval(parse(text = paste0('"', token_content, '"')))
-  }
+  static_regex
 }
 
 # some metadata about infix operators on the R parse tree.
@@ -167,7 +182,7 @@ infix_metadata$parse_tag <- ifelse(
   infix_metadata$xml_tag
 )
 # treated separately because spacing rules are different for unary operators
-infix_metadata$unary <- infix_metadata$xml_tag %in% c("OP-PLUS", "OP-MINUS", "OP-TILDE")
+infix_metadata$unary <- infix_metadata$xml_tag %in% c("OP-PLUS", "OP-MINUS", "OP-TILDE", "OP-EXCLAMATION")
 # high-precedence operators are ignored by this linter; see
 #   https://style.tidyverse.org/syntax.html#infix-operators
 infix_metadata$low_precedence <- infix_metadata$string_value %in% c(
@@ -200,18 +215,18 @@ object_name_xpath <- local({
   #   the complicated nested assignment available for symbols
   #   is not possible for strings, though we do still have to
   #   be aware of cases like 'a$"b" <- 1'.
-  xp_assignment_target_fmt <- paste0(
-    "not(parent::expr[OP-DOLLAR or OP-AT])",
-    "and %1$s::expr[",
-    " following-sibling::LEFT_ASSIGN%2$s",
-    " or preceding-sibling::RIGHT_ASSIGN",
-    " or following-sibling::EQ_ASSIGN",
-    "]",
-    "and not(%1$s::expr[",
-    " preceding-sibling::OP-LEFT-BRACKET",
-    " or preceding-sibling::LBB",
-    "])"
-  )
+  xp_assignment_target_fmt <- "
+    not(parent::expr[OP-DOLLAR or OP-AT])
+    and %1$s::expr[
+      following-sibling::LEFT_ASSIGN%2$s
+      or preceding-sibling::RIGHT_ASSIGN
+      or following-sibling::EQ_ASSIGN
+    ]
+    and not(%1$s::expr[
+     preceding-sibling::OP-LEFT-BRACKET
+     or preceding-sibling::LBB
+    ])
+  "
 
   # strings on LHS of := are only checked if they look like data.table usage DT[, "a" := ...]
   dt_walrus_cond <- "[
@@ -219,11 +234,29 @@ object_name_xpath <- local({
     or parent::expr/preceding-sibling::OP-LEFT-BRACKET
   ]"
 
-  glue("
+  # either an argument supplied positionally, i.e., not like 'arg = val', or the call <expr>
+  not_kwarg_cond <- "not(preceding-sibling::*[not(self::COMMENT)][1][self::EQ_SUB])"
+
+  glue(xp_strip_comments("
   //SYMBOL[ {sprintf(xp_assignment_target_fmt, 'ancestor', '')} ]
-  |  //STR_CONST[ {sprintf(xp_assignment_target_fmt, 'parent', dt_walrus_cond)} ]
+  |  //STR_CONST[
+      ({sprintf(xp_assignment_target_fmt, 'parent', dt_walrus_cond)})
+      or parent::expr
+        /preceding-sibling::expr[1]
+        /SYMBOL_FUNCTION_CALL[text() = 'setGeneric']
+      (: x= argument is the first positional argument, if not given as x= :)
+      or parent::expr[
+        (
+          ({not_kwarg_cond})
+          and count(preceding-sibling::expr[{not_kwarg_cond}]) = 1
+        )
+        or preceding-sibling::SYMBOL_SUB[1][text() = 'x']
+      ]
+        /preceding-sibling::expr[last()]
+        /SYMBOL_FUNCTION_CALL[text() = 'assign']
+     ]
   |  //SYMBOL_FORMALS
-  ")
+  "))
 })
 
 # Remove quotes or other things from names
@@ -235,7 +268,7 @@ strip_names <- function(x) {
 
 #' Pull out symbols used in glue strings under the current sub-tree
 #'
-#' Required by any linter (e.g. [object_usage_linter()] / [unused_imports_linter()])
+#' Required by any linter (e.g. [object_usage_linter()] / [unused_import_linter()])
 #'   that lints based on whether certain symbols are present, to ensure any
 #'   symbols only used inside glue strings are also visible to the linter.
 #'
@@ -244,7 +277,7 @@ strip_names <- function(x) {
 #' @return A character vector of symbols (variables, infix operators, and
 #'   function calls) found in glue calls under `expr`.
 #' @noRd
-extract_glued_symbols <- function(expr, interpret_glue) {
+extract_glued_symbols <- function(expr, interpret_glue = TRUE) {
   if (!isTRUE(interpret_glue)) {
     return(character())
   }
@@ -258,13 +291,11 @@ extract_glued_symbols <- function(expr, interpret_glue) {
         and not(expr[position() > 1 and not(STR_CONST)])
       ]
   "
-  glue_calls <- xml_find_all(expr, glue_call_xpath)
+  glue_calls <- xml_find_all_(expr, glue_call_xpath)
 
   glued_symbols <- new.env(parent = emptyenv())
   for (glue_call in glue_calls) {
-    # TODO(#2475): Drop tryCatch().
-    parsed_call <-
-      tryCatch(xml2lang(glue_call), error = unexpected_glue_parse_error, warning = unexpected_glue_parse_error)
+    parsed_call <- xml2lang(glue_call)
     parsed_call[[".envir"]] <- glued_symbols
     parsed_call[[".transformer"]] <- glue_symbol_extractor
     # #1459: syntax errors in glue'd code are ignored with warning, rather than crashing lint
@@ -273,12 +304,6 @@ extract_glued_symbols <- function(expr, interpret_glue) {
   names(glued_symbols)
 }
 
-unexpected_glue_parse_error <- function(cond) {
-  cli_abort(c(
-    x = "Unexpected failure to parse glue call.",
-    i = "Please report: {conditionMessage(cond)}"
-  )) # nocov
-}
 glue_parse_failure_warning <- function(cond) {
   cli_warn(c(
     x = "Evaluating glue expression while testing for local variable usage failed: {conditionMessage(cond)}",
@@ -289,8 +314,8 @@ glue_parse_failure_warning <- function(cond) {
 glue_symbol_extractor <- function(text, envir, data) {
   symbols <- tryCatch(
     all.vars(parse(text = text), functions = TRUE),
-    error = function(...) NULL,
-    warning = function(...) NULL
+    error = \(...) NULL,
+    warning = \(...) NULL
   )
   for (sym in symbols) {
     assign(sym, NULL, envir = envir)

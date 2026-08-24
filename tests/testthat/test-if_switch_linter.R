@@ -2,23 +2,42 @@ test_that("if_switch_linter skips allowed usages", {
   linter <- if_switch_linter()
 
   # don't apply to simple if/else statements
-  expect_lint("if (x == 'a') 1 else 2", NULL, linter)
+  expect_no_lint("if (x == 'a') 1 else 2", linter)
   # don't apply to non-character conditions
   #   (NB: switch _could_ be used for integral input, but this
   #    interface is IMO a bit clunky / opaque)
-  expect_lint("if (x == 1) 1 else 2", NULL, linter)
+  expect_no_lint("if (x == 1) 1 else 2", linter)
   # this also has a switch equivalent, but we don't both handling such
   #   complicated cases
-  expect_lint("if (x == 'a') 1 else if (x != 'b') 2 else 3", NULL, linter)
+  expect_no_lint("if (x == 'a') 1 else if (x != 'b') 2 else 3", linter)
   # multiple variables involved --> no clean change
-  expect_lint("if (x == 'a') 1 else if (y == 'b') 2 else 3", NULL, linter)
+  expect_no_lint("if (x == 'a') 1 else if (y == 'b') 2 else 3", linter)
   # multiple conditions --> no clean change
-  expect_lint("if (is.character(x) && x == 'a') 1 else if (x == 'b') 2 else 3", NULL, linter)
+  expect_no_lint("if (is.character(x) && x == 'a') 1 else if (x == 'b') 2 else 3", linter)
   # simple cases with two conditions might be more natural
   #   without switch(); require at least three branches to trigger a lint
-  expect_lint("if (x == 'a') 1 else if (x == 'b') 2", NULL, linter)
+  expect_no_lint("if (x == 'a') 1 else if (x == 'b') 2", linter)
+  # not thrown by raw strings
+  expect_no_lint("if (x == 'a') 1 else if (x == R'(b)') 2", linter)
   # still no third if() clause
-  expect_lint("if (x == 'a') 1 else if (x == 'b') 2 else 3", NULL, linter)
+  expect_no_lint("if (x == 'a') 1 else if (x == 'b') 2 else 3", linter)
+  # not thrown by raw strings
+  expect_no_lint("if (x == 'a') 1 else if (x == R'(b)') 2 else 3", linter)
+
+  # empty string comparisons can't use switch()
+  expect_no_lint("if (x == '') 1 else if (x == 'a') 2 else if (x == 'b') 3", linter)
+  expect_no_lint('if (x == "") 1 else if (x == "a") 2 else if (x == "b") 3', linter)
+  expect_no_lint("if (x == 'a') 1 else if (x == '') 2 else if (x == 'b') 3", linter)
+  expect_no_lint("if (x == 'a') 1 else if (x == 'b') 2 else if (x == '') 3", linter)
+  expect_no_lint("if (x == 'a') 1 else if (x == 'b') 2 else if (x == 'c') 3 else if (x == '') 4", linter)
+})
+
+test_that("if_switch_linter handles raw empty strings", {
+  linter <- if_switch_linter()
+
+  # raw empty strings can't use switch() either
+  expect_no_lint('if (x == R"--()--") 1 else if (x == "a") 2 else if (x == "b") 3', linter)
+  expect_no_lint('if (x == R"()") 1 else if (x == R"{}") 2 else if (x == R"[]") 3', linter)
 })
 
 test_that("if_switch_linter blocks simple disallowed usages", {
@@ -27,8 +46,19 @@ test_that("if_switch_linter blocks simple disallowed usages", {
 
   # anything with >= 2 equality statements is deemed switch()-worthy
   expect_lint("if (x == 'a') 1 else if (x == 'b') 2 else if (x == 'c') 3", lint_msg, linter)
+  # regardless of raw strings
+  expect_lint("if (x == 'a') 1 else if (x == r'(b)') 2 else if (x == R'--[c]--') 3", lint_msg, linter)
   # expressions are also OK
   expect_lint("if (foo(x) == 'a') 1 else if (foo(x) == 'b') 2 else if (foo(x) == 'c') 3", lint_msg, linter)
+  # including when comments are present
+  expect_lint(
+    trim_some("
+      if (foo(x) == 'a') 1 else if (foo(x # comment
+      ) == 'b') 2 else if (foo(x) == 'c') 3
+    "),
+    lint_msg,
+    linter
+  )
 })
 
 test_that("if_switch_linter handles further nested if/else correctly", {
@@ -43,9 +73,8 @@ test_that("if_switch_linter handles further nested if/else correctly", {
   # related to previous test -- if the first condition is non-`==`, the
   #   whole if/else chain is "tainted" / non-switch()-recommended.
   #   (technically, switch can work here, but the semantics are opaque)
-  expect_lint(
+  expect_no_lint(
     "if (x %in% c('a', 'e', 'f')) 1 else if (x == 'b') 2 else if (x == 'c') 3 else if (x == 'd') 4",
-    NULL,
     linter
   )
 })
@@ -69,6 +98,20 @@ test_that("multiple lints have right metadata", {
       } else if (y == 'C') {
         do_C()
       }
+      if (z1 == 'a') {
+        do_a()
+      } else if (z2 == 'b') {
+        do_b()
+      } else if (z3 == 'c') {
+        do_c()
+      }
+      if (a == '1') {
+        do_1()
+      } else if (a == '2') {
+        do_2()
+      } else if (a == '') {
+        do_blank()
+      }
     }"),
     list(
       list(lint_msg, line_number = 2L),
@@ -78,6 +121,7 @@ test_that("multiple lints have right metadata", {
   )
 })
 
+# fuzzer disable: comment_injection
 test_that("max_branch_lines= and max_branch_expressions= arguments work", {
   max_lines2_linter <- if_switch_linter(max_branch_lines = 2L)
   max_lines4_linter <- if_switch_linter(max_branch_lines = 4L)
@@ -131,9 +175,9 @@ test_that("max_branch_lines= and max_branch_expressions= arguments work", {
       9
     }
   ")
-  expect_lint(three_per_branch_lines, NULL, max_lines2_linter)
+  expect_no_lint(three_per_branch_lines, max_lines2_linter)
   expect_lint(three_per_branch_lines, lint_msg, max_lines4_linter)
-  expect_lint(three_per_branch_lines, NULL, max_expr2_linter)
+  expect_no_lint(three_per_branch_lines, max_expr2_linter)
   expect_lint(three_per_branch_lines, lint_msg, max_expr4_linter)
 
   five_per_branch_lines <- trim_some("
@@ -157,10 +201,10 @@ test_that("max_branch_lines= and max_branch_expressions= arguments work", {
       15
     }
   ")
-  expect_lint(five_per_branch_lines, NULL, max_lines2_linter)
-  expect_lint(five_per_branch_lines, NULL, max_lines4_linter)
-  expect_lint(five_per_branch_lines, NULL, max_expr2_linter)
-  expect_lint(five_per_branch_lines, NULL, max_expr4_linter)
+  expect_no_lint(five_per_branch_lines, max_lines2_linter)
+  expect_no_lint(five_per_branch_lines, max_lines4_linter)
+  expect_no_lint(five_per_branch_lines, max_expr2_linter)
+  expect_no_lint(five_per_branch_lines, max_expr4_linter)
 
   five_lines_three_expr_lines <- trim_some("
     if (x == 'a') {
@@ -183,9 +227,9 @@ test_that("max_branch_lines= and max_branch_expressions= arguments work", {
       )
     }
   ")
-  expect_lint(five_lines_three_expr_lines, NULL, max_lines2_linter)
-  expect_lint(five_lines_three_expr_lines, NULL, max_lines4_linter)
-  expect_lint(five_lines_three_expr_lines, NULL, max_expr2_linter)
+  expect_no_lint(five_lines_three_expr_lines, max_lines2_linter)
+  expect_no_lint(five_lines_three_expr_lines, max_lines4_linter)
+  expect_no_lint(five_lines_three_expr_lines, max_expr2_linter)
   expect_lint(
     five_lines_three_expr_lines,
     list(lint_msg, line_number = 1L),
@@ -207,14 +251,14 @@ test_that("max_branch_lines= and max_branch_expressions= arguments work", {
       13; 14; 15
     }
   ")
-  expect_lint(five_expr_three_lines_lines, NULL, max_lines2_linter)
+  expect_no_lint(five_expr_three_lines_lines, max_lines2_linter)
   expect_lint(
     five_expr_three_lines_lines,
     list(lint_msg, line_number = 1L),
     max_lines4_linter
   )
-  expect_lint(five_expr_three_lines_lines, NULL, max_expr2_linter)
-  expect_lint(five_expr_three_lines_lines, NULL, max_expr4_linter)
+  expect_no_lint(five_expr_three_lines_lines, max_expr2_linter)
+  expect_no_lint(five_expr_three_lines_lines, max_expr4_linter)
 })
 
 test_that("max_branch_lines= and max_branch_expressions= block over-complex switch() too", {
@@ -237,10 +281,10 @@ test_that("max_branch_lines= and max_branch_expressions= block over-complex swit
       }
     )
   ")
-  expect_lint(one_per_branch_lines, NULL, max_lines2_linter)
-  expect_lint(one_per_branch_lines, NULL, max_lines4_linter)
-  expect_lint(one_per_branch_lines, NULL, max_expr2_linter)
-  expect_lint(one_per_branch_lines, NULL, max_expr4_linter)
+  expect_no_lint(one_per_branch_lines, max_lines2_linter)
+  expect_no_lint(one_per_branch_lines, max_lines4_linter)
+  expect_no_lint(one_per_branch_lines, max_expr2_linter)
+  expect_no_lint(one_per_branch_lines, max_expr4_linter)
 
   two_per_branch_lines <- trim_some("
     switch(x,
@@ -258,10 +302,10 @@ test_that("max_branch_lines= and max_branch_expressions= block over-complex swit
       }
     )
   ")
-  expect_lint(two_per_branch_lines, NULL, max_lines2_linter)
-  expect_lint(two_per_branch_lines, NULL, max_lines4_linter)
-  expect_lint(two_per_branch_lines, NULL, max_expr2_linter)
-  expect_lint(two_per_branch_lines, NULL, max_expr4_linter)
+  expect_no_lint(two_per_branch_lines, max_lines2_linter)
+  expect_no_lint(two_per_branch_lines, max_lines4_linter)
+  expect_no_lint(two_per_branch_lines, max_expr2_linter)
+  expect_no_lint(two_per_branch_lines, max_expr4_linter)
 
   three_per_branch_lines <- trim_some("
     switch(x,
@@ -287,13 +331,13 @@ test_that("max_branch_lines= and max_branch_expressions= block over-complex swit
     list(lint_msg, line_number = 1L),
     max_lines2_linter
   )
-  expect_lint(three_per_branch_lines, NULL, max_lines4_linter)
+  expect_no_lint(three_per_branch_lines, max_lines4_linter)
   expect_lint(
     three_per_branch_lines,
     list(lint_msg, line_number = 1L),
     max_expr2_linter
   )
-  expect_lint(three_per_branch_lines, NULL, max_expr4_linter)
+  expect_no_lint(three_per_branch_lines, max_expr4_linter)
 
   five_per_branch_lines <- trim_some("
     switch(x,
@@ -353,7 +397,7 @@ test_that("max_branch_lines= and max_branch_expressions= block over-complex swit
   expect_lint(five_lines_three_expr_lines, lint_msg, max_lines2_linter)
   expect_lint(five_lines_three_expr_lines, lint_msg, max_lines4_linter)
   expect_lint(five_lines_three_expr_lines, lint_msg, max_expr2_linter)
-  expect_lint(five_lines_three_expr_lines, NULL, max_expr4_linter)
+  expect_no_lint(five_lines_three_expr_lines, max_expr4_linter)
 
   five_expr_three_lines_lines <- trim_some("
     switch(x,
@@ -375,7 +419,7 @@ test_that("max_branch_lines= and max_branch_expressions= block over-complex swit
     )
   ")
   expect_lint(five_expr_three_lines_lines, lint_msg, max_lines2_linter)
-  expect_lint(five_expr_three_lines_lines, NULL, max_lines4_linter)
+  expect_no_lint(five_expr_three_lines_lines, max_lines4_linter)
   expect_lint(five_expr_three_lines_lines, lint_msg, max_expr2_linter)
   expect_lint(five_expr_three_lines_lines, lint_msg, max_expr4_linter)
 })
@@ -398,7 +442,7 @@ test_that("max_branch_lines= and max_branch_expressions= interact correctly", {
     linter
   )
 
-  expect_lint(
+  expect_no_lint(
     trim_some("
       if (x == 'a') {
         foo(
@@ -413,11 +457,10 @@ test_that("max_branch_lines= and max_branch_expressions= interact correctly", {
         3
       }
     "),
-    NULL,
     linter
   )
 
-  expect_lint(
+  expect_no_lint(
     trim_some("
       if (x == 'a') {
         1; 2; 3; 4
@@ -427,7 +470,6 @@ test_that("max_branch_lines= and max_branch_expressions= interact correctly", {
         6
       }
     "),
-    NULL,
     linter
   )
 })
@@ -450,8 +492,8 @@ test_that("max_branch_lines= and max_branch_expressions= work for a terminal 'el
       6
     }
   ")
-  expect_lint(else_long_lines, NULL, max_lines2_linter)
-  expect_lint(else_long_lines, NULL, max_expr2_linter)
+  expect_no_lint(else_long_lines, max_lines2_linter)
+  expect_no_lint(else_long_lines, max_expr2_linter)
 
   default_long_lines <- trim_some("
     switch(x,
@@ -492,8 +534,8 @@ test_that("max_branch_lines= and max_branch_expressions= are guided by the most 
       5
     }
   ")
-  expect_lint(if_else_one_branch_lines, NULL, max_lines2_linter)
-  expect_lint(if_else_one_branch_lines, NULL, max_expr2_linter)
+  expect_no_lint(if_else_one_branch_lines, max_lines2_linter)
+  expect_no_lint(if_else_one_branch_lines, max_expr2_linter)
 
   # lint if _any_ branch is too complex
   switch_one_branch_lines <- trim_some("
@@ -514,3 +556,47 @@ test_that("max_branch_lines= and max_branch_expressions= are guided by the most 
   expect_lint(switch_one_branch_lines, lint_msg, max_lines2_linter)
   expect_lint(switch_one_branch_lines, lint_msg, max_expr2_linter)
 })
+
+test_that("max_branch_lines= and max_branch_expressions= work for non-braced branches", {
+  max_lines2_linter <- if_switch_linter(max_branch_lines = 2L)
+  max_expr1_linter <- if_switch_linter(max_branch_expressions = 1L)
+  lint_msg_if <- rex::rex("Prefer switch() statements over repeated if/else equality tests")
+  lint_msg_switch <- rex::rex("Prefer repeated if/else statements over overly-complicated switch() statements.")
+
+  # Multi-line non-braced branch in if-else (too complex for switch)
+  if_multi_line_nobrace <- trim_some("
+    if (x == 'a') foo(
+      1,
+      2
+    ) else if (x == 'b') 2 else if (x == 'c') 3 else 4
+  ")
+  expect_no_lint(if_multi_line_nobrace, max_lines2_linter)
+
+  # Multi-line non-braced branch in switch (too complex)
+  switch_multi_line_nobrace <- trim_some("
+    switch(x,
+      a = foo(
+        1,
+        2
+      ),
+      b = 2,
+      3
+    )
+  ")
+  expect_lint(switch_multi_line_nobrace, lint_msg_switch, max_lines2_linter)
+
+  # Multi-expression check on non-braced (always 1 expr, so should not exceed max_branch_expressions = 1)
+  if_single_expr_nobrace <- "if (x == 'a') foo(1) else if (x == 'b') 2 else if (x == 'c') 3 else 4"
+  expect_lint(if_single_expr_nobrace, lint_msg_if, max_expr1_linter)
+
+  switch_single_expr_nobrace <- trim_some("
+    switch(x,
+      a = foo(1),
+      b = 2,
+      3
+    )
+  ")
+  expect_no_lint(switch_single_expr_nobrace, max_expr1_linter)
+})
+
+# fuzzer enable: comment_injection

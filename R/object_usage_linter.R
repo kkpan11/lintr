@@ -3,8 +3,12 @@
 #' Check that closures have the proper usage using [codetools::checkUsage()].
 #' Note that this runs [base::eval()] on the code, so **do not use with untrusted code**.
 #'
-#' @param interpret_glue If `TRUE`, interpret [glue::glue()] calls to avoid false positives caused by local variables
-#' which are only used in a glue expression.
+#' @param interpret_glue (Defunct)
+#' @param interpret_extensions Character vector of extensions to interpret. These are meant to cover known cases where
+#'   variables may be used in ways understood by the reader but not by `checkUsage()` to avoid false positives.
+#'   Currently `"glue"` and `"rlang"` are supported, both of which are in the default.
+#'   - For `glue`, examine [glue::glue()] calls.
+#'   - For `rlang`, examine `.env$key` usages.
 #' @param skip_with A logical. If `TRUE` (default), code in `with()` expressions
 #'   will be skipped. This argument will be passed to `skipWith` argument of
 #'   `codetools::checkUsage()`.
@@ -29,19 +33,44 @@
 #' @evalRd rd_linters("package_development")
 #' @seealso [linters] for a complete list of linters available in lintr.
 #' @export
-object_usage_linter <- function(interpret_glue = TRUE, skip_with = TRUE) {
+object_usage_linter <- function(interpret_glue = NULL, interpret_extensions = c("glue", "rlang"), skip_with = TRUE) {
+  if (!is.null(interpret_glue)) {
+    lintr_deprecated(
+      "interpret_glue",
+      '"glue" in interpret_extensions',
+      version = "3.3.0",
+      type = "Argument",
+      signal = "stop"
+    )
+  }
+
+  if (length(interpret_extensions) > 0L) {
+    interpret_extensions <- match.arg(interpret_extensions, several.ok = TRUE)
+  }
+
   # NB: difference across R versions in how EQ_ASSIGN is represented in the AST
   #   (under <expr_or_assign_or_help> or <equal_assign>)
   # NB: the repeated expr[2][FUNCTION] XPath has no performance impact, so the different direct assignment XPaths are
   #   split for better readability, see PR#1197
   # TODO(#1106): use //[...] to capture assignments in more scopes
-  xpath_function_assignment <- "
-    expr[LEFT_ASSIGN or EQ_ASSIGN]/expr[2][FUNCTION or OP-LAMBDA]
-    | expr_or_assign_or_help[EQ_ASSIGN]/expr[2][FUNCTION or OP-LAMBDA]
-    | equal_assign[EQ_ASSIGN]/expr[2][FUNCTION or OP-LAMBDA]
-    | //SYMBOL_FUNCTION_CALL[text() = 'assign']/parent::expr/following-sibling::expr[2][FUNCTION or OP-LAMBDA]
-    | //SYMBOL_FUNCTION_CALL[text() = 'setMethod']/parent::expr/following-sibling::expr[3][FUNCTION or OP-LAMBDA]
-  "
+  fun_node <- "FUNCTION or OP-LAMBDA"
+  xpath_function_assignment <- glue("
+    expr[LEFT_ASSIGN or EQ_ASSIGN]/expr[2][{fun_node}]
+    | expr_or_assign_or_help[EQ_ASSIGN]/expr[2][{fun_node}]
+    | equal_assign[EQ_ASSIGN]/expr[2][{fun_node}]
+    | //SYMBOL_FUNCTION_CALL[text() = 'assign']/parent::expr/following-sibling::expr[2][{fun_node}]
+    | //SYMBOL_FUNCTION_CALL[text() = 'setMethod']/parent::expr/following-sibling::expr[3][{fun_node}]
+  ")
+
+  # code like:
+  #   foo <- \ #comment
+  #     (x) x
+  # is technically valid, but won't parse unless the lambda is in a bigger expression (here '<-').
+  #   the same doesn't apply to 'function', which is acknowledged as "not worth a breaking change to fix":
+  #   https://bugs.r-project.org/show_bug.cgi?id=18924. If we find such code (which has only ever
+  #   arisen in content fuzzing where we inject comments at random to the AST), we have to avoid parsing
+  #   it as a standalone expression.
+  xpath_unsafe_lambda <- "boolean(OP-LAMBDA[@line1 = following-sibling::*[1][self::COMMENT]/@line1])"
 
   # not all instances of linted symbols are potential sources for the observed violations -- see #1914
   symbol_exclude_cond <- "preceding-sibling::OP-DOLLAR or preceding-sibling::OP-AT or ancestor::expr[OP-TILDE]"
@@ -59,13 +88,24 @@ object_usage_linter <- function(interpret_glue = TRUE, skip_with = TRUE) {
 
     xml <- source_expression$full_xml_parsed_content
 
-    # run the following at run-time, not "compile" time to allow package structure to change
-    env <- make_check_env(pkg_name, xml)
+    # Catch missing packages and report them as lints
+    outer_env <- new.env(parent = emptyenv())
+    outer_env$library_lints <- list()
+    library_lint_hook <- function(lint_node, lint_msg) {
+      outer_env$library_lints[[length(outer_env$library_lints) + 1L]] <- xml_nodes_to_lints(
+        lint_node, source_expression = source_expression, lint_message = lint_msg, type = "warning"
+      )
+    }
 
-    fun_assignments <- xml_find_all(xml, xpath_function_assignment)
+    # run the following at run-time, not "compile" time to allow package structure to change
+    env <- make_check_env(pkg_name, xml, library_lint_hook)
+
+    fun_assignments <- xml_find_all_(xml, xpath_function_assignment)
 
     lapply(fun_assignments, function(fun_assignment) {
-      code <- get_content(lines = source_expression$content, fun_assignment)
+      # this will mess with the source line numbers. but I don't think anybody cares.
+      needs_braces <- xml_find_lgl_(fun_assignment, xpath_unsafe_lambda)
+      code <- get_content(lines = source_expression$content, fun_assignment, needs_braces = needs_braces)
       fun <- try_silently(eval(
         envir = env,
         parse(
@@ -74,25 +114,27 @@ object_usage_linter <- function(interpret_glue = TRUE, skip_with = TRUE) {
         )
       ))
 
+      # nocov start
       if (inherits(fun, "try-error")) {
-        return()
+        cli_abort_internal("Invalid code reached in object_usage_linter: {code}\nPlease report.")
       }
-      known_used_symbols <- extract_glued_symbols(fun_assignment, interpret_glue = interpret_glue)
+      # nocov end
+      known_used_symbols <- known_used_symbols(fun_assignment, interpret_extensions = interpret_extensions)
       res <- parse_check_usage(
         fun,
         known_used_symbols = known_used_symbols,
         declared_globals = declared_globals,
-        start_line = as.integer(xml_attr(fun_assignment, "line1")),
-        end_line = as.integer(xml_attr(fun_assignment, "line2")),
+        start_line = as.integer(xml_attr_(fun_assignment, "line1")),
+        end_line = as.integer(xml_attr_(fun_assignment, "line2")),
         skip_with = skip_with
       )
 
       res$name <- re_substitutes(res$name, rex("<-"), "")
 
-      lintable_symbols <- xml_find_all(fun_assignment, xpath_culprit_symbol)
+      lintable_symbols <- xml_find_all_(fun_assignment, xpath_culprit_symbol)
 
       lintable_symbol_names <- gsub("^`|`$", "", xml_text(lintable_symbols))
-      lintable_symbol_lines <- as.integer(xml_attr(lintable_symbols, "line1"))
+      lintable_symbol_lines <- as.integer(xml_attr_(lintable_symbols, "line1"))
 
       matched_symbol <- vapply(
         seq_len(nrow(res)),
@@ -111,19 +153,27 @@ object_usage_linter <- function(interpret_glue = TRUE, skip_with = TRUE) {
       # fallback to line based matching if no symbol is found
       missing_symbol <- is.na(matched_symbol)
       nodes[missing_symbol] <- lapply(which(missing_symbol), function(i) {
-        line_based_match <- xml_find_first(
+        line_based_match <- xml_find_first_(
           fun_assignment,
           glue::glue_data(res[i, ], "descendant::expr[@line1 = {line1} and @line2 = {line2}]")
         )
-        if (is.na(line_based_match)) fun_assignment else line_based_match
+        # nocov start
+        if (is.na(line_based_match)) {
+          cli_abort_internal("Didn't find an expression matching {res$name}. Please report")
+        }
+        # nocov end
+        line_based_match
       })
 
-      xml_nodes_to_lints(nodes, source_expression = source_expression, lint_message = res$message, type = "warning")
+      c(
+        outer_env$library_lints,
+        xml_nodes_to_lints(nodes, source_expression = source_expression, lint_message = res$message, type = "warning")
+      )
     })
   })
 }
 
-make_check_env <- function(pkg_name, xml) {
+make_check_env <- function(pkg_name, xml, library_lint_hook) {
   if (!is.null(pkg_name)) {
     parent_env <- try_silently(getNamespace(pkg_name))
   }
@@ -134,26 +184,26 @@ make_check_env <- function(pkg_name, xml) {
 
   symbols <- c(
     get_assignment_symbols(xml),
-    get_imported_symbols(xml)
+    get_imported_symbols(xml, library_lint_hook)
   )
 
   # Just assign them an empty function
   for (symbol in symbols) {
-    assign(symbol, function(...) invisible(), envir = env)
+    assign(symbol, \(...) invisible(), envir = env)
   }
   env
 }
 
 get_assignment_symbols <- function(xml) {
-  get_r_string(xml_find_all(
+  get_r_string(xml_find_all_(
     xml,
     "
       expr[LEFT_ASSIGN or EQ_ASSIGN]/expr[1]/SYMBOL[1] |
       expr[RIGHT_ASSIGN]/expr[2]/SYMBOL[1] |
       equal_assign/expr[1]/SYMBOL[1] |
       expr_or_assign_or_help/expr[1]/SYMBOL[1] |
-      expr[expr[1][SYMBOL_FUNCTION_CALL/text()='assign']]/expr[2]/* |
-      expr[expr[1][SYMBOL_FUNCTION_CALL/text()='setMethod']]/expr[2]/*
+      expr[expr[1][SYMBOL_FUNCTION_CALL/text() = 'assign']]/expr[2]/* |
+      expr[expr[1][SYMBOL_FUNCTION_CALL/text() = 'setMethod']]/expr[2]/*
     "
   ))
 }
@@ -208,19 +258,6 @@ parse_check_usage <- function(expression,
     )
   )
 
-  # nocov start
-  is_missing <- is.na(res$message)
-  if (any(is_missing)) {
-    # TODO(#2474): Remove this.
-    missing_msg <- vals[is_missing][[1L]] # nolint: object_usage_linter. TODO(#2252).
-    cli_warn(c(
-      x = "Couldn't parse usage message {.str {missing_msg}}. Ignoring {.val {sum(is_missing)}} usage warnings.",
-      i = "Please report a possible bug at {.url https://github.com/r-lib/lintr/issues}."
-    ))
-  }
-  # nocov end
-  res <- res[!is_missing, ]
-
   res$line1 <- ifelse(
     nzchar(res$line1),
     as.integer(res$line1) + start_line - 1L,
@@ -238,7 +275,7 @@ parse_check_usage <- function(expression,
   res
 }
 
-get_imported_symbols <- function(xml) {
+get_imported_symbols <- function(xml, library_lint_hook) {
   import_exprs_xpath <- "
   //SYMBOL_FUNCTION_CALL[text() = 'library' or text() = 'require']
     /parent::expr
@@ -251,13 +288,47 @@ get_imported_symbols <- function(xml) {
     ]
     /expr[STR_CONST or SYMBOL][1]
   "
-  import_exprs <- xml_find_all(xml, import_exprs_xpath)
+  import_exprs <- xml_find_all_(xml, import_exprs_xpath)
   imported_pkgs <- get_r_string(import_exprs)
 
-  unlist(lapply(imported_pkgs, function(pkg) {
+  # nolint next: undesirable_function_name_linter.
+  unlist(Map(pkg = imported_pkgs, expr = xml_parent(import_exprs), function(pkg, expr) {
     tryCatch(
       getNamespaceExports(pkg),
-      error = function(e) character()
+      error = function(e) {
+        lib_paths <- .libPaths() # nolint: undesirable_function_name. .libPaths() is necessary here.
+        lib_noun <- if (length(lib_paths) == 1L) "library" else "libraries"
+        lint_msg <- paste0(
+          "Could not find exported symbols for package \"", pkg, "\" in ", lib_noun, " ",
+          toString(shQuote(lib_paths)), " (", conditionMessage(e), "). This may lead to false positives."
+        )
+        library_lint_hook(expr, lint_msg)
+        character()
+      }
     )
   }))
+}
+
+known_used_symbols <- function(fun_assignment, interpret_extensions) {
+  unique(c(
+    if ("rlang" %in% interpret_extensions) extract_env_symbols(fun_assignment),
+    if ("glue" %in% interpret_extensions) extract_glued_symbols(fun_assignment)
+  ))
+}
+
+extract_env_symbols <- function(fun_assignment) {
+  env_names <- xml_find_all_(
+    fun_assignment,
+    "
+    .//SYMBOL[text() = '.env']
+      /parent::expr
+      /following-sibling::OP-DOLLAR
+      /following-sibling::SYMBOL
+    | .//SYMBOL[text() = '.env']
+      /parent::expr
+      /following-sibling::LBB
+      /following-sibling::expr[STR_CONST]
+    "
+  )
+  get_r_string(env_names)
 }

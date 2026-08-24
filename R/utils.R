@@ -1,9 +1,7 @@
-`%||%` <- function(x, y) {
-  if (is.null(x) || length(x) == 0L || (is.atomic(x[[1L]]) && is.na(x[[1L]]))) {
-    y
-  } else {
-    x
-  }
+# TODO(R>=4.4.0): remove this.
+# NB: {backports} approach doesn't work since we need this before .onLoad() in names2()
+if (!exists("%||%", "package:base")) {
+  `%||%` <- function(x, y) if (is.null(x)) y else x # nolint: coalesce_linter.
 }
 
 `%==%` <- function(x, y) {
@@ -23,18 +21,41 @@ flatten_lints <- function(x) {
 # any function using unlist or c was dropping the classnames,
 # so need to brute force copy the objects
 flatten_list <- function(x, class) {
-  res <- list()
-  itr <- 1L
+  if (length(x) == 0L) {
+    return(list())
+  }
+  if (inherits(x, class)) {
+    return(list(x))
+  }
+  if (is.list(x)) {
+    is_flat <- TRUE
+    for (i in seq_along(x)) {
+      if (!inherits(x[[i]], class)) {
+        is_flat <- FALSE
+        break
+      }
+    }
+    if (is_flat) {
+      if (!is.null(names(x))) {
+        names(x) <- NULL
+      }
+      return(x)
+    }
+  }
+
+  outer_env <- new.env(parent = emptyenv())
+  outer_env$res <- list()
+  outer_env$itr <- 1L
   assign_item <- function(x) {
     if (inherits(x, class)) {
-      res[[itr]] <<- x
-      itr <<- itr + 1L
+      outer_env$res[[outer_env$itr]] <- x
+      outer_env$itr <- outer_env$itr + 1L
     } else if (is.list(x)) {
       lapply(x, assign_item)
     }
   }
   assign_item(x)
-  res
+  outer_env$res
 }
 
 fix_names <- function(x, default) {
@@ -51,12 +72,13 @@ fix_names <- function(x, default) {
 
 linter_auto_name <- function(which = -3L) {
   sys_call <- sys.call(which = which)
-  nm <- paste(deparse(sys_call, 500L), collapse = " ")
+  nm <- deparse1(sys_call)
   regex <- rex(start, one_or_more(alnum %or% "." %or% "_" %or% ":"))
   if (re_matches(nm, regex)) {
     match_data <- re_matches(nm, regex, locations = TRUE)
-    nm <- substr(nm, start = 1L, stop = match_data[1L, "end"])
-    nm <- re_substitutes(nm, rex(start, alnums, "::"), "")
+    nm <- nm |>
+      substr(start = 1L, stop = match_data[1L, "end"]) |>
+      re_substitutes(rex(start, alnums, "::"), "")
   }
   nm
 }
@@ -86,37 +108,28 @@ names2 <- function(x) {
   names(x) %||% rep("", length(x))
 }
 
-get_content <- function(lines, info) {
+#' @param needs_braces Logical, default FALSE. If it's possible or known that
+#'   `lines` cannot be parsed as a standalone expression, only a "child"
+#'   expression, we insert braces `{}` around it to ensure that it parses.
+#'   There is only one known case for this, namely, when finding code with
+#'   shorthand lambda `\(` where `\` and `(` are separated by a comment;
+#'   see `object_usage_linter()` for more details.
+#' @noRd
+get_content <- function(lines, info, needs_braces = FALSE) {
   lines[is.na(lines)] <- ""
 
   if (!missing(info)) {
+    # put in data.frame-like format
     if (is_node(info)) {
-      info <- lapply(stats::setNames(nm = c("col1", "col2", "line1", "line2")), function(attr) {
-        as.integer(xml_attr(info, attr))
-      })
+      info <- lapply(xml_attrs_(info), as.integer)
     }
 
     lines <- lines[seq(info$line1, info$line2)]
     lines[length(lines)] <- substr(lines[length(lines)], 1L, info$col2)
     lines[1L] <- substr(lines[1L], info$col1, nchar(lines[1L]))
   }
+  if (needs_braces) lines <- c("{", lines, "}")
   paste(lines, collapse = "\n")
-}
-
-logical_env <- function(x) {
-  res <- as.logical(Sys.getenv(x))
-  if (is.na(res)) {
-    return(NULL)
-  }
-  res
-}
-
-# from ?chartr
-rot <- function(ch, k = 13L) {
-  p0 <- function(...) paste(c(...), collapse = "")
-  alphabet <- c(letters, LETTERS, " '")
-  idx <- seq_len(k)
-  chartr(p0(alphabet), p0(c(alphabet[-idx], alphabet[idx])), ch)
 }
 
 try_silently <- function(expr) {
@@ -130,7 +143,7 @@ try_silently <- function(expr) {
 # interface to work like options() or setwd() -- returns the old value for convenience
 set_lang <- function(new_lang) {
   old_lang <- Sys.getenv("LANGUAGE", unset = NA)
-  Sys.setenv(LANGUAGE = new_lang) # nolint: undesirable_function. Avoiding {withr} dep in pkg.
+  Sys.setenv(LANGUAGE = new_lang) # nolint: undesirable_function_name. Avoiding {withr} dep in pkg.
   old_lang
 }
 # handle the logic of either unsetting if it was previously unset, or resetting
@@ -138,7 +151,7 @@ reset_lang <- function(old_lang) {
   if (is.na(old_lang)) {
     Sys.unsetenv("LANGUAGE")
   } else {
-    Sys.setenv(LANGUAGE = old_lang) # nolint: undesirable_function. Avoiding {withr} dep in pkg.
+    Sys.setenv(LANGUAGE = old_lang) # nolint: undesirable_function_name. Avoiding {withr} dep in pkg.
   }
 }
 
@@ -166,34 +179,74 @@ Linter <- function(fun, name = linter_auto_name(), linter_level = c(NA_character
   fun
 }
 
-read_lines <- function(file, encoding = settings$encoding, ...) {
-  terminal_newline <- TRUE
+ensure_utf8 <- function(lines, encoding = NULL) {
+  if (is.null(encoding) || is.na(encoding)) {
+    encoding <- ""
+  }
+
+  if (encoding == "" && l10n_info()[["UTF-8"]]) {
+    encoding <- "UTF-8"
+  }
+
+  if (encoding == "UTF-8") {
+    Encoding(lines) <- "UTF-8"
+    return(lines)
+  }
+
+  is_utf8 <- Encoding(lines) == "UTF-8"
+  if (any(is_utf8)) {
+    return(lines)
+  }
+
+  lines_conv <- iconv(lines, from = encoding, to = "UTF-8")
+  lines[!is.na(lines_conv)] <- lines_conv[!is.na(lines_conv)]
+  Encoding(lines) <- "UTF-8"
+  lines
+}
+
+read_lines <- function(file, ...) {
+  outer_env <- new.env(parent = emptyenv())
+  outer_env$terminal_newline <- TRUE
   lines <- withCallingHandlers(
     readLines(file, warn = TRUE, ...),
     warning = function(w) {
-      if (grepl("incomplete final line found on", w$message, fixed = TRUE)) {
-        terminal_newline <<- FALSE
+      if (grepl("incomplete final line found on", conditionMessage(w), fixed = TRUE)) {
+        outer_env$terminal_newline <- FALSE
         invokeRestart("muffleWarning")
       }
     }
   )
-  lines_conv <- iconv(lines, from = encoding, to = "UTF-8")
-  lines[!is.na(lines_conv)] <- lines_conv[!is.na(lines_conv)]
-  Encoding(lines) <- "UTF-8"
-  attr(lines, "terminal_newline") <- terminal_newline
+  attr(lines, "terminal_newline") <- outer_env$terminal_newline
   lines
 }
-
-# nocov start
-# support for usethis::use_release_issue(). Make sure to use devtools::load_all() beforehand!
-release_bullets <- function() {
-}
-# nocov end
 
 # see issue #923, PR #2455 -- some locales ignore _ when running sort(), others don't.
 #   We want to consistently treat "_" < "n" = "N"; C locale does this, which 'radix' uses.
 platform_independent_order <- function(x) order(tolower(x), method = "radix")
 platform_independent_sort <- function(x) x[platform_independent_order(x)]
+
+#' re_matches with type-stable logical output
+#' TODO(r-lib/rex#94): Use re_matches() option directly & deprecate this.
+#' @noRd
+re_matches_logical <- function(x, regex, ...) {
+  res <- re_matches(x, regex, ...)
+  if (is.data.frame(res)) {
+    res <- complete.cases(res)
+  }
+  res
+}
+
+#' re_matches with type-stable locations output for the overall match
+#' @noRd
+re_matches_locations <- function(x, regex, ...) {
+  m <- regexpr(regex, x, perl = TRUE, ...)
+  match_start <- as.vector(m)
+  match_end <- match_start + attr(m, "match.length") - 1L
+  matched <- match_start != -1L
+  match_start[!matched] <- NA_integer_
+  match_end[!matched] <- NA_integer_
+  data.frame(start = match_start, end = match_end)
+}
 
 #' Extract text from `STR_CONST` nodes
 #'
@@ -229,15 +282,22 @@ platform_independent_sort <- function(x) x[platform_independent_order(x)]
 #'
 #' @export
 get_r_string <- function(s, xpath = NULL) {
+  if (length(s) == 0L) {
+    return(character())
+  }
   if (is_node(s) || is_nodeset(s)) {
     if (is.null(xpath)) {
       s <- xml_text(s)
     } else {
-      s <- xml_find_chr(s, sprintf("string(%s)", xpath))
+      s <- xml_find_chr_(s, sprintf("string(%s)", xpath))
     }
   }
-  # parse() skips "" elements --> offsets the length of the output,
-  #   but NA in --> NA out
+  r_string_from_parse_text(s)
+}
+
+# parse() skips "" elements --> offsets the length of the output,
+#   but NA in --> NA out
+r_string_from_parse_text <- function(s) {
   is.na(s) <- !nzchar(s)
   out <- as.character(parse(text = s, keep.source = FALSE))
   is.na(out) <- is.na(s)
@@ -245,9 +305,12 @@ get_r_string <- function(s, xpath = NULL) {
 }
 
 is_linter <- function(x) inherits(x, "linter")
+is_lint <- function(x) inherits(x, "lint")
+
+is_error <- function(x) inherits(x, "error")
 
 is_tainted <- function(lines) {
-  inherits(tryCatch(nchar(lines), error = identity), "error")
+  is_error(tryCatch(nchar(lines), error = identity))
 }
 
 #' Check that the entries in ... are valid
@@ -257,8 +320,9 @@ is_tainted <- function(lines) {
 #' @param ref_help Help page to refer users hitting an error to.
 #' @noRd
 check_dots <- function(dot_names, ref_calls, ref_help = as.character(sys.call(-1L)[[1L]])) {
-  valid_args <- unlist(lapply(ref_calls, function(f) names(formals(f))))
-  is_valid <- dot_names %in% valid_args
+  valid_args <- unlist(lapply(ref_calls, \(f) names(formals(f))))
+  # TODO(#2502): needn't check is.na() after R 4.2.0
+  is_valid <- is.na(dot_names) | !nzchar(dot_names) | dot_names %in% valid_args
   if (all(is_valid)) {
     return(invisible())
   }
@@ -270,5 +334,5 @@ check_dots <- function(dot_names, ref_calls, ref_help = as.character(sys.call(-1
 }
 
 cli_abort_internal <- function(...) {
-  cli_abort(..., .internal = TRUE)
+  cli_abort(..., .internal = TRUE) # nocov
 }

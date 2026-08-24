@@ -48,35 +48,6 @@ print.lint <- function(x, ...) {
   invisible(x)
 }
 
-markdown <- function(x, info, ...) {
-  cat(
-    sep = "",
-    "[", x$filename, ":",
-    as.character(x$line_number), ":",
-    as.character(x$column_number), ":", "]",
-    "(",
-    file.path(
-      "https://github.com",
-      info$user,
-      info$repo,
-      "blob",
-      info$commit,
-      x$filename
-    ), "#L", x$line_number,
-    ")",
-    " ",
-    "*", x$type, ":", "* ",
-    "[", x$linter, "] ",
-    "**", x$message, "**\n",
-    "```r\n\U200B", # we use a zero width unicode character here so that Github
-    # does not strip the leading whitespace
-    x$line, "\n",
-    highlight_string(x$message, x$column_number, x$ranges),
-    "\n```\n"
-  )
-  invisible(x)
-}
-
 #' @export
 format.lints <- function(x, ..., width = getOption("lintr.format_width")) {
   paste(vapply(x, format, character(1L), width = width), collapse = "\n")
@@ -114,39 +85,6 @@ print.lints <- function(x, ...) {
   invisible(x)
 }
 
-trim_output <- function(x, max = 65535L) {
-  # if x is less than the max, just return it
-  if (length(x) <= 0L || nchar(x) <= max) {
-    return(x)
-  }
-
-  # otherwise trim x to the max, then search for the lint starts
-  x <- substr(x, 1L, max)
-
-  re <- rex(
-    "[", except_some_of(":"), ":", numbers, ":", numbers, ":", "]",
-    "(", except_some_of(")"), ")",
-    space,
-    "*", or("style", "warning", "error"), ":", "*",
-    except_some_of("\r\n"), newline,
-    except_some_of("\r\n"), newline,
-    except_some_of("\r\n"), newline,
-    except_some_of("\r\n"), newline,
-    except_some_of("\r\n"), newline
-  )
-
-  lint_starts <- re_matches(x, re, global = TRUE, locations = TRUE)[[1L]]
-
-  # if at least one lint ends before the cutoff, cutoff there, else just use
-  # the cutoff
-  last_end <- lint_starts[NROW(lint_starts), "end"]
-  if (!is.na(last_end)) {
-    substr(x, 1L, last_end)
-  } else {
-    x
-  }
-}
-
 #' @export
 names.lints <- function(x, ...) {
   vapply(x, `[[`, character(1L), "filename")
@@ -157,7 +95,7 @@ split.lints <- function(x, f = NULL, ...) {
   if (is.null(f)) f <- names(x)
   splt <- split.default(x, f)
   for (i in names(splt)) class(splt[[i]]) <- "lints"
-  return(splt)
+  splt
 }
 
 #' @export
@@ -173,16 +111,22 @@ as.data.frame.lints <- function(x, row.names = NULL, optional = FALSE, ...) { # 
   )
 }
 
+#' @exportS3Method tibble::as_tibble
 as_tibble.lints <- function(x, ..., # nolint: object_name_linter.
                             .rows = NULL,
                             .name_repair = c("check_unique", "unique", "universal", "minimal"),
                             rownames = NULL) {
-  stopifnot(requireNamespace("tibble", quietly = TRUE))
+  if (!requireNamespace("tibble", quietly = TRUE)) {
+    cli_abort("Package {.pkg tibble} is required to convert lints to a tibble.")
+  }
   tibble::as_tibble(as.data.frame(x), ..., .rows = .rows, .name_repair = .name_repair, rownames = rownames)
 }
 
+#' @exportS3Method data.table::as.data.table
 as.data.table.lints <- function(x, keep.rownames = FALSE, ...) { # nolint: object_name_linter.
-  stopifnot(requireNamespace("data.table", quietly = TRUE))
+  if (!requireNamespace("data.table", quietly = TRUE)) {
+    cli_abort("Package {.pkg data.table} is required to convert lints to a data.table.")
+  }
   data.table::setDT(as.data.frame(x), keep.rownames = keep.rownames, ...)
 }
 

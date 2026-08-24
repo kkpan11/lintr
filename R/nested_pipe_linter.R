@@ -51,8 +51,9 @@
 #' @seealso [linters] for a complete list of linters available in lintr.
 #' @export
 nested_pipe_linter <- function(
-    allow_inline = TRUE,
-    allow_outer_calls = c("try", "tryCatch", "withCallingHandlers")) {
+  allow_inline = TRUE,
+  allow_outer_calls = c("try", "tryCatch", "withCallingHandlers")
+) {
   multiline_and <- if (allow_inline) "@line1 != @line2 and" else ""
   xpath <- glue("
   (//PIPE | //SPECIAL[{ xp_text_in_table(magrittr_pipes) }])
@@ -70,7 +71,7 @@ nested_pipe_linter <- function(
   Linter(linter_level = "expression", function(source_expression) {
     xml <- source_expression$xml_parsed_content
 
-    bad_expr <- xml_find_all(xml, xpath)
+    bad_expr <- xml_find_all_(xml, xpath)
 
     xml_nodes_to_lints(
       bad_expr,

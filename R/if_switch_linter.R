@@ -159,12 +159,17 @@
 #' @seealso [linters] for a complete list of linters available in lintr.
 #' @export
 if_switch_linter <- function(max_branch_lines = 0L, max_branch_expressions = 0L) {
-  equal_str_cond <- "expr[1][EQ and expr/STR_CONST]"
+  equal_str_cond <- "expr[1][EQ and expr/STR_CONST[string-length(text()) > 2]]"
 
   if (max_branch_lines > 0L || max_branch_expressions > 0L) {
     complexity_cond <- xp_or(c(
-      if (max_branch_lines > 0L) paste("OP-RIGHT-BRACE/@line2 - OP-LEFT-BRACE/@line1 > 1 +", max_branch_lines),
-      if (max_branch_expressions > 0L) paste("count(expr) >", max_branch_expressions)
+      if (max_branch_lines > 0L) {
+        c(
+          paste("OP-LEFT-BRACE and (OP-RIGHT-BRACE/@line2 - OP-LEFT-BRACE/@line1 > 1 +", max_branch_lines, ")"),
+          paste("not(OP-LEFT-BRACE) and (@line2 - @line1 >=", max_branch_lines, ")")
+        )
+      },
+      if (max_branch_expressions > 0L) paste("OP-LEFT-BRACE and count(expr) >", max_branch_expressions)
     ))
     branch_expr_cond <- xp_and(c(
       xp_or(
@@ -178,23 +183,16 @@ if_switch_linter <- function(max_branch_lines = 0L, max_branch_expressions = 0L)
     max_lines_cond <- glue(".//expr[{branch_expr_cond}]")
 
     switch_xpath <- glue("
-    parent::expr
-      /parent::expr[expr[
-        position() > 2
-        and {complexity_cond}
-      ]]
-    ")
+    parent::expr[expr[
+      position() > 2
+      and {complexity_cond}
+    ]]")
   } else {
     max_lines_cond <- "false"
 
     switch_xpath <- NULL
   }
 
-  # NB: IF AND {...} AND ELSE/... implies >= 3 equality conditions are present
-  # .//expr/IF/...: the expr in `==` that's _not_ the STR_CONST
-  # not(preceding::IF): prevent nested matches which might be incorrect globally
-  # not(. != .): don't match if there are _any_ expr which _don't_ match the top
-  #   expr
   if_xpath <- glue("
   //IF
     /parent::expr[
@@ -205,10 +203,6 @@ if_switch_linter <- function(max_branch_lines = 0L, max_branch_expressions = 0L)
         and {equal_str_cond}
         and ELSE/following-sibling::expr[IF and {equal_str_cond}]
       ]
-      and not(
-        .//expr/IF/following-sibling::{equal_str_cond}/expr[not(STR_CONST)]
-          != expr[1][EQ]/expr[not(STR_CONST)]
-      )
       and not({ max_lines_cond })
     ]
   ")
@@ -216,7 +210,18 @@ if_switch_linter <- function(max_branch_lines = 0L, max_branch_expressions = 0L)
   Linter(linter_level = "expression", function(source_expression) {
     xml <- source_expression$xml_parsed_content
 
-    bad_expr <- xml_find_all(xml, if_xpath)
+    bad_expr <- xml_find_all_(xml, if_xpath)
+
+    bad_expr_clean <- strip_comments_from_subtree(bad_expr)
+    expr_all_equal <- vapply(bad_expr_clean, if_else_chain_expr_is_unique, logical(1L))
+    bad_expr <- bad_expr[expr_all_equal]
+
+    # Exclude empty strings, which can't be used as switch() case names
+    nonempty <- vapply(bad_expr, function(expr) {
+      str_vals <- if_else_chain_strings(expr)
+      all(nzchar(get_r_string(str_vals)))
+    }, logical(1L))
+    bad_expr <- bad_expr[nonempty]
 
     lints <- xml_nodes_to_lints(
       bad_expr,
@@ -231,7 +236,7 @@ if_switch_linter <- function(max_branch_lines = 0L, max_branch_expressions = 0L)
 
     if (!is.null(switch_xpath)) {
       xml_calls <- source_expression$xml_find_function_calls("switch")
-      switch_expr <- xml_find_all(xml_calls, switch_xpath)
+      switch_expr <- xml_find_all_(xml_calls, switch_xpath)
 
       lints <- c(lints, xml_nodes_to_lints(
         switch_expr,
@@ -243,4 +248,36 @@ if_switch_linter <- function(max_branch_lines = 0L, max_branch_expressions = 0L)
 
     lints
   })
+}
+
+# Extract STR_CONST values from equality conditions in an if/else if chain
+if_else_chain_strings <- function(expr) {
+  str_vals <- character()
+  first <- xml_find_chr_(expr, "string(IF/following-sibling::expr[1][EQ]/expr/STR_CONST)")
+  if (nzchar(first)) str_vals <- c(str_vals, first)
+  current <- expr
+  repeat {
+    else_if <- xml_find_first_(current, "ELSE/following-sibling::expr[IF]")
+    if (is.na(else_if)) break
+    current <- else_if
+    str_val <- xml_find_chr_(current, "string(IF/following-sibling::expr[1][EQ]/expr/STR_CONST)")
+    if (nzchar(str_val)) str_vals <- c(str_vals, str_val)
+  }
+  str_vals
+}
+
+# Check that equality conditions in an if/else if chain use the same expression
+if_else_chain_expr_is_unique <- function(expr) {
+  expr_nodes <- character()
+  first <- xml_find_chr_(expr, "string(IF/following-sibling::expr[1][EQ]/expr[not(STR_CONST)])")
+  if (nzchar(first)) expr_nodes <- c(expr_nodes, first)
+  current <- expr
+  repeat {
+    else_if <- xml_find_first_(current, "ELSE/following-sibling::expr[IF]")
+    if (is.na(else_if)) break
+    current <- else_if
+    expr_node <- xml_find_chr_(current, "string(IF/following-sibling::expr[1][EQ]/expr[not(STR_CONST)])")
+    if (nzchar(expr_node)) expr_nodes <- c(expr_nodes, expr_node)
+  }
+  length(unique(expr_nodes)) == 1L
 }

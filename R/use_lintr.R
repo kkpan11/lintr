@@ -30,8 +30,7 @@ use_lintr <- function(path = ".", type = c("tidyverse", "full")) {
     cli_abort("Found an existing configuration file at {.file {config_file}}.")
   }
   type <- match.arg(type)
-  the_config <- switch(
-    type,
+  the_config <- switch(type,
     tidyverse = list(
       linters = 'linters_with_defaults() # see vignette("lintr")',
       encoding = '"UTF-8"'
@@ -43,5 +42,32 @@ use_lintr <- function(path = ".", type = c("tidyverse", "full")) {
     )
   )
   write.dcf(the_config, config_file, width = Inf)
+
+  pkg_path <- find_package(path)
+
+  if (is.null(pkg_path)) {
+    return(invisible(config_file))
+  }
+
+  rbuildignore_path <- file.path(pkg_path, ".Rbuildignore")
+  rel_path <- xfun::relative_path(config_file, pkg_path)
+  escaped_config_path <- rex(start, rel_path, end)
+
+  if (!file.exists(rbuildignore_path)) {
+    writeLines(escaped_config_path, rbuildignore_path)
+    cli_inform("Added {.val {escaped_config_path}} to {.code .Rbuildignore}.")
+    return(invisible(config_file))
+  }
+
+  ignored <- readLines(rbuildignore_path, warn = FALSE)
+
+  if (escaped_config_path %in% ignored) {
+    cli_inform("Configuration file {.val {escaped_config_path}} is already ignored in {.code .Rbuildignore}.")
+    return(invisible(config_file))
+  }
+
+  writeLines(c(ignored, escaped_config_path), rbuildignore_path)
+  cli_inform("Added {.val {escaped_config_path}} to {.code .Rbuildignore}.")
+
   invisible(config_file)
 }

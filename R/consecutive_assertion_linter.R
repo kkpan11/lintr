@@ -1,6 +1,6 @@
 #' Force consecutive calls to assertions into just one when possible
 #'
-#' [stopifnot()] accepts any number of tests, so sequences like
+#' [base::stopifnot()] accepts any number of tests, so sequences like
 #'   `stopifnot(x); stopifnot(y)` are redundant. Ditto for tests using
 #'   `assertthat::assert_that()` without specifying `msg=`.
 #'
@@ -35,27 +35,23 @@ consecutive_assertion_linter <- function() {
   next_expr <- "following-sibling::*[self::expr or self::expr_or_assign_or_help or self::equal_assign][1]"
 
   stopifnot_xpath <- glue("
-  parent::expr
-    /parent::expr[
-      expr[1]/SYMBOL_FUNCTION_CALL = {next_expr}/expr[1]/SYMBOL_FUNCTION_CALL
-    ]
-  ")
+  parent::expr[
+    expr[1]/SYMBOL_FUNCTION_CALL = {next_expr}/expr[1]/SYMBOL_FUNCTION_CALL
+  ]")
   assert_that_xpath <- glue("
-  parent::expr
-    /parent::expr[
-      not(SYMBOL_SUB[text() = 'msg'])
-      and not(following-sibling::expr[1]/SYMBOL_SUB[text() = 'msg'])
-      and expr[1]/SYMBOL_FUNCTION_CALL = {next_expr}/expr[1]/SYMBOL_FUNCTION_CALL
-    ]
-  ")
+  parent::expr[
+    not(SYMBOL_SUB[text() = 'msg'])
+    and not(following-sibling::expr[1]/SYMBOL_SUB[text() = 'msg'])
+    and expr[1]/SYMBOL_FUNCTION_CALL = {next_expr}/expr[1]/SYMBOL_FUNCTION_CALL
+  ]")
 
   Linter(linter_level = "file", function(source_expression) {
     # need the full file to also catch usages at the top level
     stopifnot_calls <- source_expression$xml_find_function_calls("stopifnot")
     assert_that_calls <- source_expression$xml_find_function_calls("assert_that")
     bad_expr <- combine_nodesets(
-      xml_find_all(stopifnot_calls, stopifnot_xpath),
-      xml_find_all(assert_that_calls, assert_that_xpath)
+      xml_find_all_(stopifnot_calls, stopifnot_xpath),
+      xml_find_all_(assert_that_calls, assert_that_xpath)
     )
 
     matched_function <- xp_call_name(bad_expr)

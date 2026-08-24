@@ -1,5 +1,9 @@
 url: https://lintr.r-lib.org
 
+authors:
+  Indrajeet Patil:
+    href: https://indrajeetpatil.github.io/
+
 template:
   bootstrap: 5
   light-switch: true
@@ -54,6 +58,7 @@ reference:
       - Lint
       - checkstyle_output
       - sarif_output
+      - gitlab_output
       - clear_cache
       - get_source_expressions
       - parse_exclusions

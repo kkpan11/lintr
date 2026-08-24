@@ -27,11 +27,11 @@
 system_file_linter <- function() {
   # either system.file(file.path(...)) or file.path(system.file(...))
   file_path_xpath <- "
-  parent::expr[following-sibling::expr/expr/SYMBOL_FUNCTION_CALL[text() = 'system.file']]
+  self::*[following-sibling::expr/expr/SYMBOL_FUNCTION_CALL[text() = 'system.file']]
     /parent::expr
   "
   system_file_xpath <- "
-  parent::expr[following-sibling::expr/expr/SYMBOL_FUNCTION_CALL[text() = 'file.path']]
+  self::*[following-sibling::expr/expr/SYMBOL_FUNCTION_CALL[text() = 'file.path']]
     /parent::expr
   "
 
@@ -40,8 +40,8 @@ system_file_linter <- function() {
     system_file_calls <- source_expression$xml_find_function_calls("system.file")
 
     bad_expr <- combine_nodesets(
-      xml_find_all(file_path_calls, file_path_xpath),
-      xml_find_all(system_file_calls, system_file_xpath)
+      xml_find_all_(file_path_calls, file_path_xpath),
+      xml_find_all_(system_file_calls, system_file_xpath)
     )
 
     outer_call <- xp_call_name(bad_expr)

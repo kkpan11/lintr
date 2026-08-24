@@ -4,11 +4,22 @@
 \alias{object_usage_linter}
 \title{Object usage linter}
 \usage{
-object_usage_linter(interpret_glue = TRUE, skip_with = TRUE)
+object_usage_linter(
+  interpret_glue = NULL,
+  interpret_extensions = c("glue", "rlang"),
+  skip_with = TRUE
+)
 }
 \arguments{
-\item{interpret_glue}{If \code{TRUE}, interpret \code{\link[glue:glue]{glue::glue()}} calls to avoid false positives caused by local variables
-which are only used in a glue expression.}
+\item{interpret_glue}{(Defunct)}
+
+\item{interpret_extensions}{Character vector of extensions to interpret. These are meant to cover known cases where
+variables may be used in ways understood by the reader but not by \code{checkUsage()} to avoid false positives.
+Currently \code{"glue"} and \code{"rlang"} are supported, both of which are in the default.
+\itemize{
+\item For \code{glue}, examine \code{\link[glue:glue]{glue::glue()}} calls.
+\item For \code{rlang}, examine \code{.env$key} usages.
+}}
 
 \item{skip_with}{A logical. If \code{TRUE} (default), code in \code{with()} expressions
 will be skipped. This argument will be passed to \code{skipWith} argument of
@@ -52,6 +63,7 @@ The following linters are tagged with 'package_development':
 \item{\code{\link{expect_null_linter}}}
 \item{\code{\link{expect_s3_class_linter}}}
 \item{\code{\link{expect_s4_class_linter}}}
+\item{\code{\link{expect_shape_linter}}}
 \item{\code{\link{expect_true_false_linter}}}
 \item{\code{\link{expect_type_linter}}}
 \item{\code{\link{package_hooks_linter}}}

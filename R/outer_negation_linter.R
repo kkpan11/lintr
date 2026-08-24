@@ -39,19 +39,19 @@ outer_negation_linter <- function() {
   # NB: requirement that count(expr)>1 is to prevent any() from linting
   #   e.g. in magrittr pipelines.
   xpath <- "
-  parent::expr[following-sibling::expr]
+  self::*[following-sibling::expr]
     /parent::expr[
       not(expr[
         position() > 1
         and not(OP-EXCLAMATION)
-        and not(preceding-sibling::*[1][self::EQ_SUB])
+        and not(preceding-sibling::*[not(self::COMMENT)][1][self::EQ_SUB])
       ])
     ]
   "
 
   Linter(linter_level = "expression", function(source_expression) {
     xml_calls <- source_expression$xml_find_function_calls(c("any", "all"))
-    bad_expr <- xml_find_all(xml_calls, xpath)
+    bad_expr <- xml_find_all_(xml_calls, xpath)
 
     matched_call <- xp_call_name(bad_expr)
     inverse_call <- ifelse(matched_call == "any", "all", "any")

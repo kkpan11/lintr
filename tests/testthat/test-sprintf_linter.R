@@ -4,14 +4,13 @@ patrick::with_parameters_test_that(
     linter <- sprintf_linter()
 
     # NB: using paste0, not sprintf, to avoid escaping '%d' in sprint fmt=
-    expect_lint(paste0(call_name, "('hello')"), NULL, linter)
-    expect_lint(paste0(call_name, "('hello %d', 1)"), NULL, linter)
-    expect_lint(paste0(call_name, "('hello %d', x)"), NULL, linter)
-    expect_lint(paste0(call_name, "('hello %d', x + 1)"), NULL, linter)
-    expect_lint(paste0(call_name, "('hello %d', f(x))"), NULL, linter)
-    expect_lint(paste0(call_name, "('hello %1$s %1$s', x)"), NULL, linter)
-    expect_lint(paste0(call_name, "('hello %1$s %1$s %2$d', x, y)"), NULL, linter)
-    expect_lint(paste0(call_name, "('hello %1$s %1$s %2$d %3$s', x, y, 1.5)"), NULL, linter)
+    expect_no_lint(paste0(call_name, "('hello %d', 1)"), linter)
+    expect_no_lint(paste0(call_name, "('hello %d', x)"), linter)
+    expect_no_lint(paste0(call_name, "('hello %d', x + 1)"), linter)
+    expect_no_lint(paste0(call_name, "('hello %d', f(x))"), linter)
+    expect_no_lint(paste0(call_name, "('hello %1$s %1$s', x)"), linter)
+    expect_no_lint(paste0(call_name, "('hello %1$s %1$s %2$d', x, y)"), linter)
+    expect_no_lint(paste0(call_name, "('hello %1$s %1$s %2$d %3$s', x, y, 1.5)"), linter)
   },
   .test_name = c("sprintf", "gettextf"),
   call_name = c("sprintf", "gettextf")
@@ -21,9 +20,20 @@ patrick::with_parameters_test_that(
   "sprintf_linter blocks disallowed usages",
   {
     linter <- sprintf_linter()
-    unused_arg_msg <- if (getRversion() >= "4.1.0") "one argument not used by format" else NULL
+    unused_arg_msg <- "one argument not used by format"
 
     expect_lint(paste0(call_name, "('hello', 1)"), unused_arg_msg, linter)
+    expect_lint(paste0(call_name, "('abc', 'def', 'ghi')"), "arguments not used by format", linter)
+
+    expect_lint(paste0(call_name, "('hello')"), "single argument", linter)
+    expect_lint(paste0(call_name, "(paste0(x, y))"), "single argument", linter)
+    expect_lint(paste0(call_name, "(foo())"), "single argument", linter)
+    expect_lint(paste0(call_name, "(x)"), "single argument", linter)
+    expect_lint(paste0(call_name, "(fmt = x)"), "single argument", linter)
+    expect_lint(paste0(call_name, "('100%% automated')"), "single argument", linter)
+    expect_lint(paste0(call_name, "('100%%%% automated')"), "single argument", linter)
+    expect_lint(paste0(call_name, "('100%%%s')"), "too few", linter)
+    expect_lint(paste0(call_name, "('100%%%%s', x)"), unused_arg_msg, linter)
 
     expect_lint(
       paste0(call_name, "('hello %d', 'a')"),
@@ -57,6 +67,12 @@ patrick::with_parameters_test_that(
       rex::rex("invalid format '%d'; use format %f, %e, %g or %a for numeric objects"),
       linter
     )
+
+    expect_lint(
+      paste0(call_name, "()"),
+      'argument "fmt" is missing',
+      linter
+    )
   },
   .test_name = c("sprintf", "gettextf"),
   call_name = c("sprintf", "gettextf")
@@ -66,24 +82,42 @@ test_that("edge cases are detected correctly", {
   linter <- sprintf_linter()
 
   # works with multi-line sprintf and comments
-  expect_lint(
+  expect_no_lint(
     trim_some("
       sprintf(
         'test fmt %s', # this is a comment
         2
       )
     "),
-    NULL,
+    linter
+  )
+
+  expect_no_lint(
+    trim_some("
+      'test fmt %s' |>   # this is a pipe comment
+        sprintf(         # this is an opening comment
+          2              # this is a mid-call comment
+        )
+    "),
+    linter
+  )
+
+  expect_lint(
+    trim_some("
+      'test fmt' |>   # this is a pipe comment
+        sprintf()
+    "),
+    "single argument",
     linter
   )
 
   # dots
-  expect_lint("sprintf('%d %d, %d', id, ...)", NULL, linter)
+  expect_no_lint("sprintf('%d %d, %d', id, ...)", linter)
 
   # TODO(#1265) extend ... detection to at least test for too many arguments.
 
   # named argument fmt
-  expect_lint("sprintf(x, fmt = 'hello %1$s %1$s')", NULL, linter)
+  expect_no_lint("sprintf(x, fmt = 'hello %1$s %1$s')", linter)
 
   expect_lint(
     "sprintf(x, fmt = 'hello %1$s %1$s %3$d', y)",
@@ -92,7 +126,22 @@ test_that("edge cases are detected correctly", {
   )
 
   # #2131: xml2lang stripped necessary whitespace
-  expect_lint("sprintf('%s', if (A) '' else y)", NULL, linter)
+  expect_no_lint("sprintf('%s', if (A) '' else y)", linter)
+
+  expect_no_lint("sprintf('100%%%s', x)", linter)
+})
+
+test_that("gettextf keyword arguments work correctly", {
+  linter <- sprintf_linter()
+
+  expect_lint("gettextf(domain = 'R', paste0(x, y))", "single argument", linter)
+  expect_lint("gettextf(paste0(x, y), domain = 'R')", "single argument", linter)
+  expect_lint("gettextf(domain = dom, paste0(x, y))", "single argument", linter)
+  expect_no_lint("gettextf(domain = 'R', 'hello %s', x)", linter)
+  expect_no_lint("gettextf('hello %s', domain = 'R', x)", linter)
+  expect_lint("gettextf(domain = 'R', 'hello')", "single argument", linter)
+  expect_no_lint("gettextf(domain = dom, 'hello %s', x)", linter)
+  expect_lint("gettextf(domain = dom, 'hello %s')", "too few", linter)
 })
 
 local({
@@ -103,17 +152,17 @@ local({
   patrick::with_parameters_test_that(
     "piping into sprintf works",
     {
-      expect_lint(paste("x", pipe, "sprintf(fmt = '%s')"), NULL, linter)
+      expect_no_lint(paste("x", pipe, "sprintf(fmt = '%s')"), linter)
       # no fmt= specified -> this is just 'sprintf("%s", "%s%s")', which won't lint
-      expect_lint(paste('"%s"', pipe, 'sprintf("%s%s")'), NULL, linter)
+      expect_no_lint(paste('"%s"', pipe, 'sprintf("%s%s")'), linter)
       expect_lint(paste("x", pipe, "sprintf(fmt = '%s%s')"), unused_fmt_msg, linter)
 
       # Cannot evaluate statically --> skip
-      expect_lint(paste("x", pipe, 'sprintf("a")'), NULL, linter)
+      expect_no_lint(paste("x", pipe, 'sprintf("a")'), linter)
       # Nested pipes
       expect_lint(
         paste("'%%sb'", pipe, "sprintf('%s')", pipe, "sprintf('a')"),
-        if (getRversion() >= "4.1.0") list(column_number = nchar(paste("'%%sb'", pipe, "x")), message = unused_arg_msg),
+        list(column_number = nchar(paste("'%%sb'", pipe, "x")), message = unused_arg_msg),
         linter
       )
       expect_lint(
@@ -132,9 +181,27 @@ local({
   )
 })
 
-test_that("lints vectorize", {
-  skip_if_not_r_version("4.1.0")
+test_that("pipe logic survives adversarial comments", {
+  linter <- sprintf_linter()
 
+  expect_no_lint(
+    trim_some("
+      x |> # comment
+      sprintf(fmt = '%s')
+    "),
+    linter
+  )
+
+  expect_no_lint(
+    trim_some('
+      "%s" %>% # comment
+      sprintf("%s%s")
+    '),
+    linter
+  )
+})
+
+test_that("lints vectorize", {
   expect_lint(
     trim_some("{
       sprintf('%s', a, b)
